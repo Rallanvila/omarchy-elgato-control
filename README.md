@@ -24,7 +24,7 @@ See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for the implementation histor
 Install directly with Omarchy:
 
 ```bash
-omarchy plugin add https://github.com/amitcpatel/omarchy-streamdeck --enable
+omarchy plugin add https://github.com/amitcpatel/omarchy-elgato-control --enable
 ```
 
 The first run creates `~/.config/omarchy-streamdeck/profile.json`. Use the
