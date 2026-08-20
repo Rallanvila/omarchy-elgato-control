@@ -12,7 +12,7 @@ Build an Omarchy Shell plugin that uses a Stream Deck as a native Linux control 
 
 ### Omarchy integration
 
-- Created local plugin `acp.streamdeck` with `bar-widget` and `service` entry points.
+- Created plugin `io.github.amitcpatel.elgato-control` with `bar-widget` and `service` entry points.
 - Added a right-side bar widget using the official Elgato mark.
 - Added a panel for profile, Plus, Pedal, key/dial/pedal assignments, and Key Light state.
 - The service owns and restarts the Python daemon; **Edit profile** opens the user JSON.
@@ -60,9 +60,9 @@ At the last check both lights were reachable, off, brightness 40, temperature 14
 
 | Path | Purpose |
 | --- | --- |
-| `~/.config/omarchy/plugins/acp.streamdeck` | Installed plugin source |
-| `~/.config/omarchy-streamdeck/profile.json` | Mutable user profile |
-| `~/.local/state/omarchy-streamdeck/status.json` | Daemon status read by the panel |
+| `~/.config/omarchy/plugins/io.github.amitcpatel.elgato-control` | Installed plugin source |
+| `~/.config/elgato-control/profile.json` | Mutable user profile |
+| `~/.local/state/elgato-control/status.json` | Daemon status read by the panel |
 
 ## Known limitations and future work
 
@@ -77,10 +77,10 @@ At the last check both lights were reachable, off, brightness 40, temperature 14
 ## Validation commands used
 
 ```bash
-python -m py_compile bin/omarchy-streamdeck
-omarchy plugin validate ~/.config/omarchy/plugins/acp.streamdeck
-bin/omarchy-streamdeck status --json
-pgrep -af 'omarchy-streamdeck daemon'
+python -m py_compile bin/elgato-control
+omarchy plugin validate ~/.config/omarchy/plugins/io.github.amitcpatel.elgato-control
+bin/elgato-control status --json
+pgrep -af 'elgato-control daemon'
 journalctl --user --since '10 seconds ago' --no-pager
 ```
 

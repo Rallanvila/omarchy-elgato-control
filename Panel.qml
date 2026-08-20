@@ -6,8 +6,8 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "acp.streamdeck"
-  ipcTarget: "acp.streamdeck"
+  moduleName: "io.github.amitcpatel.elgato-control"
+  ipcTarget: "io.github.amitcpatel.elgato-control"
   manageIpc: false
   property var anchorItem: null
   property var hostWidget: null
@@ -20,7 +20,7 @@ Panel {
   readonly property bool hasPedal: status.pedal !== null
   readonly property bool hasWave: status.wave !== null && status.wave !== undefined
   readonly property bool hasLights: (status.lights || []).some(function(x) { return x.reachable })
-  readonly property string helper: Qt.resolvedUrl("bin/omarchy-streamdeck").toString().replace("file://", "")
+  readonly property string helper: Qt.resolvedUrl("bin/elgato-control").toString().replace("file://", "")
   property var actionOptions: []
   property string selectedDevice: "streamdeck"
   property string selectedControl: "key"

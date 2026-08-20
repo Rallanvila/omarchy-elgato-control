@@ -4,7 +4,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "acp.streamdeck"
+  moduleName: "io.github.amitcpatel.elgato-control"
 
   function injectPanel() {
     if (!panelLoader.item) return

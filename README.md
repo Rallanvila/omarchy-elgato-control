@@ -17,6 +17,24 @@ The panel is capability-driven: Plus-only LCD/dial controls, Pedal mappings,
 Wave controls, and Key Lights are shown only when the relevant hardware is
 detected.
 
+## Screenshots
+
+### Stream Deck Plus
+
+![Elgato Control Stream Deck Plus editor](preview.png)
+
+### Stream Deck Pedal
+
+![Elgato Control Stream Deck Pedal editor](screenshots/pedal.png)
+
+### Wave:3
+
+![Elgato Control Wave:3 controls](screenshots/wave-3.png)
+
+### Key Lights
+
+![Elgato Control Key Light status](screenshots/key-lights.png)
+
 See [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md) for the implementation history, verified hardware, architecture, and remaining work.
 
 ## Installation
@@ -27,7 +45,8 @@ Install directly with Omarchy:
 omarchy plugin add https://github.com/amitcpatel/omarchy-elgato-control --enable
 ```
 
-The first run creates `~/.config/omarchy-streamdeck/profile.json`. Use the
+The first run creates `~/.config/elgato-control/profile.json`. Existing
+`~/.config/omarchy-streamdeck/profile.json` mappings are migrated automatically. Use the
 Elgato Control panel to configure keys, dials, and pedals. Changes and artwork
 apply automatically.
 
@@ -43,11 +62,11 @@ apply automatically.
 ### Remove
 
 ```bash
-omarchy plugin remove acp.streamdeck
+omarchy plugin remove io.github.amitcpatel.elgato-control
 ```
 
 Removing the plugin leaves the user's reusable profile at
-`~/.config/omarchy-streamdeck/profile.json`. Delete that directory separately
+`~/.config/elgato-control/profile.json`. Delete that directory separately
 only when the mappings are no longer wanted.
 
 ## Default controls
@@ -71,7 +90,7 @@ push-to-talk mode: pressing starts recording and releasing stops it.
 The same setting is available from the CLI:
 
 ```bash
-bin/omarchy-streamdeck set-pedal 2 voxtype_push_to_talk
+bin/elgato-control set-pedal 2 voxtype_push_to_talk
 ```
 
 Keyboard mappings use `wtype` directly with a fixed allowlist. They do not
@@ -104,10 +123,10 @@ tile instead of leaving the key blank.
 ## Commands
 
 ```bash
-bin/omarchy-streamdeck init
-bin/omarchy-streamdeck profile
-bin/omarchy-streamdeck status --json
-bin/omarchy-streamdeck daemon
+bin/elgato-control init
+bin/elgato-control profile
+bin/elgato-control status --json
+bin/elgato-control daemon
 ```
 
 ## Automatic device discovery
@@ -151,7 +170,7 @@ control type in the local status file. This is intended for verifying new
 hardware mappings and contains no key labels, commands, or network credentials.
 
 ```bash
-bin/omarchy-streamdeck status --json | jq .recentReports
+bin/elgato-control status --json | jq .recentReports
 ```
 
 ## References and credits

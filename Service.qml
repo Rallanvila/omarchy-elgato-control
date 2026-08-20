@@ -5,7 +5,7 @@ import Quickshell.Io
 // The shell owns one long-running HID reader. It exits cleanly with the shell.
 Item {
   id: root
-  readonly property string helper: Qt.resolvedUrl("bin/omarchy-streamdeck").toString().replace("file://", "")
+  readonly property string helper: Qt.resolvedUrl("bin/elgato-control").toString().replace("file://", "")
 
   Process {
     id: daemon

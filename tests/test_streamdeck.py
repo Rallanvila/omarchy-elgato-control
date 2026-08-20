@@ -6,8 +6,8 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = pathlib.Path(__file__).parents[1] / "bin" / "omarchy-streamdeck"
-loader = importlib.machinery.SourceFileLoader("omarchy_streamdeck", str(SCRIPT))
+SCRIPT = pathlib.Path(__file__).parents[1] / "bin" / "elgato-control"
+loader = importlib.machinery.SourceFileLoader("elgato_control", str(SCRIPT))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 module = importlib.util.module_from_spec(spec)
 loader.exec_module(module)
@@ -71,6 +71,20 @@ class DeviceModelTests(unittest.TestCase):
                 module.set_control_action("keys", 0, "action", "lock")
                 saved = module.json.loads(profile_path.read_text())
             self.assertEqual("lock", saved["keys"][0]["action"])
+
+    def test_legacy_profile_is_migrated_to_elgato_control_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            config = root / "elgato-control"
+            state = root / "state"
+            legacy = root / "omarchy-streamdeck"
+            legacy.mkdir()
+            (legacy / "profile.json").write_text('{"name":"Migrated","keys":[]}')
+            with mock.patch.object(module, "CONFIG", config), mock.patch.object(module, "STATE", state), \
+                 mock.patch.object(module, "PROFILE", config / "profile.json"), \
+                 mock.patch.object(module, "LEGACY_CONFIG", legacy):
+                module.ensure_profile()
+                self.assertEqual("Migrated", module.load_profile()["name"])
 
     def test_wave_gain_action_changes_hardware_control_without_shell(self):
         wave = {"card": 2, "gainRaw": 40, "sourceId": 89}

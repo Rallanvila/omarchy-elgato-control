@@ -3,6 +3,7 @@
 ## 0.3.0 — 2026-08-20
 
 - Rename the application to Elgato Control for its multi-device scope.
+- Adopt the permanent plugin ID `io.github.amitcpatel.elgato-control`, normalized helper and data paths, and automatic migration of existing profiles.
 - Add capability-based discovery for Stream Deck Plus, Pedal, Wave:3, and Key Lights.
 - Add Stream Deck Plus key artwork, four-dial LCD rendering, and dial controls.
 - Add visual key, dial, and Pedal remapping with installed application discovery.
@@ -12,6 +13,7 @@
 - Restrict Key Light HTTP traffic to resolved local addresses, reject redirects, and bound response sizes.
 - Add generated application artwork with safe non-blank fallbacks.
 - Add regression tests for device capabilities, input parsing, discovery, application actions, and Wave controls.
+- Add screenshots for each supported product view.
 
 ## 0.2.0
 

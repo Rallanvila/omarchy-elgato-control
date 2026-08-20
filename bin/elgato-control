@@ -9,12 +9,13 @@ DEVICE_SPECS = {
     PEDAL: {"kind": "pedal", "capabilities": ["pedals"]},
 }
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CONFIG = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")) / "omarchy-streamdeck"
-STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", pathlib.Path.home() / ".local/state")) / "omarchy-streamdeck"
+CONFIG = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")) / "elgato-control"
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", pathlib.Path.home() / ".local/state")) / "elgato-control"
+LEGACY_CONFIG = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")) / "omarchy-streamdeck"
 PROFILE = CONFIG / "profile.json"
 STATUS = STATE / "status.json"
 ICONS = ROOT / "assets" / "keys"
-KEY_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "omarchy-streamdeck" / "keys"
+KEY_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "elgato-control" / "keys"
 KEY_ACTIONS = {
     "key_home": "Home", "key_end": "End", "key_page_up": "Page_Up", "key_page_down": "Page_Down",
     "key_left": "Left", "key_right": "Right", "key_up": "Up", "key_down": "Down",
@@ -169,7 +170,9 @@ def discover_lights(timeout=3):
 
 def ensure_profile():
     CONFIG.mkdir(parents=True, exist_ok=True); STATE.mkdir(parents=True, exist_ok=True)
-    if not PROFILE.exists(): shutil.copyfile(ROOT / "defaults/profile.json", PROFILE)
+    if not PROFILE.exists():
+        legacy_profile = LEGACY_CONFIG / "profile.json"
+        shutil.copyfile(legacy_profile if legacy_profile.is_file() else ROOT / "defaults/profile.json", PROFILE)
 
 def load_profile():
     ensure_profile()
@@ -479,7 +482,7 @@ class Daemon:
             self.status["error"] = "LCD rendering requires ImageMagick"
             return
         try:
-            with tempfile.TemporaryDirectory(prefix="omarchy-streamdeck-lcd-") as directory:
+            with tempfile.TemporaryDirectory(prefix="elgato-control-lcd-") as directory:
                 svg = pathlib.Path(directory) / "lcd.svg"
                 jpg = pathlib.Path(directory) / "lcd.jpg"
                 svg.write_text(lcd_svg(self.profile, self.brightness, self.light_states))

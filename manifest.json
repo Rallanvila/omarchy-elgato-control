@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "acp.streamdeck",
+  "id": "io.github.amitcpatel.elgato-control",
   "name": "Elgato Control",
   "version": "0.3.0",
   "author": "Amit Patel",
