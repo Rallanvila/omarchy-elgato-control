@@ -147,6 +147,11 @@ The default profile leaves this list empty so the repository does not publish
 device-specific network identities. Empty means automatic discovery; configured
 hosts override discovery when a network blocks mDNS.
 
+The Key Lights page provides direct grouped and per-light control. Select **All
+Lights** or an individual light, then switch power on or off, set brightness
+from 1–100%, set color temperature from 2900–7000K, or refresh discovery and
+status. Unreachable lights remain visible with their controls disabled.
+
 ## Wave:3 controls
 
 When a Wave:3 is detected, its device page exposes the hardware controls that

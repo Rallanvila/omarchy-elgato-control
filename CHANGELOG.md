@@ -10,6 +10,7 @@
 - Add VOXtype push-to-talk Pedal support.
 - Add native Wave:3 gain, mute, headphone, preset, and default-source controls.
 - Add automatic Key Light discovery and grouped light actions.
+- Add grouped and per-light power, brightness, temperature, refresh, and reachability controls to the Key Lights page.
 - Restrict Key Light HTTP traffic to resolved local addresses, reject redirects, and bound response sizes.
 - Add generated application artwork with safe non-blank fallbacks.
 - Add regression tests for device capabilities, input parsing, discovery, application actions, and Wave controls.

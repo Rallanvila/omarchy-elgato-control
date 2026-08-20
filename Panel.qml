@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -25,6 +26,7 @@ Panel {
   property string selectedDevice: "streamdeck"
   property string selectedControl: "key"
   property int selectedIndex: 0
+  property int selectedLightIndex: -1
   readonly property color controlFace: "#080808"
   readonly property color controlFaceRaised: "#111111"
   readonly property color controlBorder: Qt.rgba(1, 1, 1, 0.22)
@@ -54,6 +56,29 @@ Panel {
   function waveAction(action) {
     waveProc.command = [root.helper, "wave", action]
     waveProc.running = true
+  }
+  function selectedLights() {
+    var lights = root.status.lights || []
+    return root.selectedLightIndex < 0 ? lights.filter(function(light) { return light.reachable }) : (lights[root.selectedLightIndex] ? [lights[root.selectedLightIndex]] : [])
+  }
+  function selectedLightName() {
+    if (root.selectedLightIndex < 0) return "All Key Lights"
+    return ((root.status.lights || [])[root.selectedLightIndex] || {}).name || "Key Light"
+  }
+  function selectedLightValue(field, fallback) {
+    var lights = selectedLights().filter(function(light) { return light.reachable && light[field] !== undefined })
+    if (lights.length === 0) return fallback
+    var total = 0
+    for (var i = 0; i < lights.length; i++) total += Number(lights[i][field])
+    return Math.round(total / lights.length)
+  }
+  function selectedLightReachable() { return selectedLights().some(function(light) { return light.reachable }) }
+  function selectedLightOn() { return selectedLights().some(function(light) { return light.reachable && light.on }) }
+  function lightAction(action, value) {
+    if (lightProc.running) return
+    lightProc.command = [root.helper, "lights", action, "--target", root.selectedLightIndex < 0 ? "all" : String(root.selectedLightIndex)]
+    if (value !== undefined) lightProc.command = lightProc.command.concat(["--value", String(Math.round(value))])
+    lightProc.running = true
   }
 
   function open() { root.controller.show(); refresh() }
@@ -98,6 +123,21 @@ Panel {
   }
   Process { id: saveProc; onExited: function() { root.refresh() } }
   Process { id: waveProc; onExited: function() { root.refresh() } }
+  Process {
+    id: lightProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var next = Object.assign({}, root.status)
+          next.lights = JSON.parse(text)
+          root.status = next
+          root.error = ""
+        } catch (e) { root.refresh() }
+      }
+    }
+    onExited: function(code) { if (code !== 0) root.error = "Key Light control failed"; root.refresh() }
+  }
   Timer { interval: 1500; repeat: true; running: root.opened; triggeredOnStart: true; onTriggered: root.refresh() }
 
   KeyboardPanel {
@@ -140,7 +180,7 @@ Panel {
           width: parent.width
           options: root.deviceOptions
           value: root.selectedDevice
-          onChanged: function(value) { root.selectedDevice = value; root.selectedIndex = 0; root.selectedControl = value === "streamdeck" ? "key" : "pedal" }
+          onChanged: function(value) { root.selectedDevice = value; root.selectedIndex = 0; root.selectedLightIndex = -1; root.selectedControl = value === "streamdeck" ? "key" : value }
         }
 
         Row {
@@ -231,14 +271,32 @@ Panel {
               }
             }
 
-            Row {
-              visible: root.selectedDevice === "lights"; anchors.centerIn: parent; width: parent.width - Style.space(28); spacing: Style.space(10)
-              Repeater { model: root.status.lights || []
-                Rectangle { width: (parent.width - Style.space(10)) / Math.max(1, (root.status.lights || []).length); height: Style.space(120); radius: 0; color: modelData.on ? Qt.rgba(1, .72, .18, .18) : Qt.rgba(1, 1, 1, .04); border.color: modelData.on ? "#f0b632" : Qt.rgba(1, 1, 1, .2)
+            Column {
+              visible: root.selectedDevice === "lights"; anchors.centerIn: parent; width: parent.width - Style.space(28); spacing: Style.space(12)
+              Text { text: "SELECT LIGHT"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
+              Row {
+                width: parent.width; spacing: Style.space(8)
+                Rectangle {
+                  width: (parent.width - Style.space(16)) / 3; height: Style.space(140); radius: 0; color: root.controlFace
+                  border.width: root.selectedLightIndex === -1 ? 2 : 1; border.color: root.selectedLightIndex === -1 ? Color.accent : root.controlBorder
                   Column { anchors.centerIn: parent; spacing: Style.space(7)
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰛨"; color: modelData.on ? "#f0b632" : Color.muted; font.family: Style.font.family; font.pixelSize: 30 }
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.name; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 11; font.bold: true }
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.reachable ? modelData.brightness + "% · " + Math.round(1000000 / modelData.temperature) + "K" : "Unavailable"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 10 }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰛨"; color: root.selectedLightOn() ? "#f0b632" : Color.muted; font.family: Style.font.family; font.pixelSize: 30 }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "ALL LIGHTS"; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 10; font.bold: true }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.selectedLightReachable() ? root.selectedLightValue("brightness", 0) + "%" : "Unavailable"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9 }
+                  }
+                  MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectedLightIndex = -1 }
+                }
+                Repeater { model: root.status.lights || []
+                  Rectangle {
+                    required property var modelData; required property int index
+                    width: (parent.width - Style.space(16)) / 3; height: Style.space(140); radius: 0; color: root.controlFace
+                    border.width: root.selectedLightIndex === index ? 2 : 1; border.color: root.selectedLightIndex === index ? Color.accent : root.controlBorder
+                    Column { anchors.centerIn: parent; width: parent.width - Style.space(8); spacing: Style.space(7)
+                      Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰛨"; color: modelData.on ? "#f0b632" : Color.muted; font.family: Style.font.family; font.pixelSize: 30 }
+                      Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: modelData.name; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 10; font.bold: true }
+                      Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.reachable ? modelData.brightness + "% · " + Math.round(1000000 / modelData.temperature) + "K" : "Unavailable"; color: modelData.reachable ? Color.muted : Color.urgent; font.family: Style.font.family; font.pixelSize: 9 }
+                    }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectedLightIndex = index }
                   }
                 }
               }
@@ -249,7 +307,7 @@ Panel {
             width: parent.width * 0.39 - Style.space(14); spacing: Style.space(10)
             Text { text: "ACTION INSPECTOR"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 10; font.bold: true }
             Text {
-              text: root.selectedDevice === "streamdeck" ? (root.selectedControl === "key" ? "Key " + (root.selectedIndex + 1) : "Dial " + (root.selectedIndex + 1)) : root.selectedDevice === "pedal" ? ["Left pedal", "Middle pedal", "Right pedal"][root.selectedIndex] : root.selectedDevice === "wave" ? "Wave:3" : "Key Lights"
+              text: root.selectedDevice === "streamdeck" ? (root.selectedControl === "key" ? "Key " + (root.selectedIndex + 1) : "Dial " + (root.selectedIndex + 1)) : root.selectedDevice === "pedal" ? ["Left pedal", "Middle pedal", "Right pedal"][root.selectedIndex] : root.selectedDevice === "wave" ? "Wave:3" : root.selectedLightName()
               color: Color.foreground; font.family: Style.font.family; font.pixelSize: 15; font.bold: true
             }
             Text { visible: root.selectedDevice === "streamdeck" || root.selectedDevice === "pedal"; width: parent.width; wrapMode: Text.WordWrap; text: "Choose an application, system function, or key. Changes apply immediately."; color: Color.muted; font.family: Style.font.family; font.pixelSize: 10 }
@@ -308,7 +366,41 @@ Panel {
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.waveAction("default") }
               }
             }
-            Text { visible: root.selectedDevice === "lights"; width: parent.width; wrapMode: Text.WordWrap; text: "Select Key Light actions from any Stream Deck key, dial, or pedal."; color: Color.muted; font.family: Style.font.family; font.pixelSize: 11 }
+            Column {
+              visible: root.selectedDevice === "lights"; width: parent.width; spacing: Style.space(9)
+              Text { text: root.selectedLightReachable() ? (root.selectedLightOn() ? "ON · REACHABLE" : "OFF · REACHABLE") : "UNAVAILABLE"; color: root.selectedLightReachable() ? (root.selectedLightOn() ? "#f0b632" : Color.muted) : Color.urgent; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
+              Text { text: "POWER"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
+              Row { width: parent.width; spacing: Style.space(6)
+                Repeater { model: [{label:"ON",action:"on"},{label:"OFF",action:"off"}]
+                  Rectangle { required property var modelData; width: (parent.width - Style.space(6)) / 2; height: Style.space(32); radius: 0; color: root.controlFace; border.color: root.controlBorder; opacity: root.selectedLightReachable() ? 1 : .45
+                    Text { anchors.centerIn: parent; text: modelData.label; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
+                    MouseArea { anchors.fill: parent; enabled: root.selectedLightReachable(); cursorShape: Qt.PointingHandCursor; onClicked: root.lightAction(modelData.action) }
+                  }
+                }
+              }
+              Text { text: "BRIGHTNESS  " + root.selectedLightValue("brightness", 0) + "%"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
+              Controls.Slider {
+                id: lightBrightness; width: parent.width; from: 1; to: 100; stepSize: 1; value: root.selectedLightValue("brightness", 40); enabled: root.selectedLightReachable() && !lightProc.running
+                onPressedChanged: if (!pressed) root.lightAction("brightness", value)
+                background: Rectangle { x: lightBrightness.leftPadding; y: lightBrightness.topPadding + lightBrightness.availableHeight / 2 - height / 2; width: lightBrightness.availableWidth; height: Style.space(4); radius: 0; color: Qt.rgba(1,1,1,.12)
+                  Rectangle { width: lightBrightness.visualPosition * parent.width; height: parent.height; radius: 0; color: Color.accent }
+                }
+                handle: Rectangle { x: lightBrightness.leftPadding + lightBrightness.visualPosition * (lightBrightness.availableWidth - width); y: lightBrightness.topPadding + lightBrightness.availableHeight / 2 - height / 2; implicitWidth: Style.space(12); implicitHeight: Style.space(18); radius: 0; color: Color.foreground; border.color: root.controlBorder }
+              }
+              Text { text: "TEMPERATURE  " + Math.round(1000000 / root.selectedLightValue("temperature", 200)) + "K"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
+              Controls.Slider {
+                id: lightTemperature; width: parent.width; from: 2900; to: 7000; stepSize: 100; value: Math.round(1000000 / root.selectedLightValue("temperature", 200)); enabled: root.selectedLightReachable() && !lightProc.running
+                onPressedChanged: if (!pressed) root.lightAction("temperature", value)
+                background: Rectangle { x: lightTemperature.leftPadding; y: lightTemperature.topPadding + lightTemperature.availableHeight / 2 - height / 2; width: lightTemperature.availableWidth; height: Style.space(4); radius: 0; color: Qt.rgba(1,1,1,.12)
+                  Rectangle { width: lightTemperature.visualPosition * parent.width; height: parent.height; radius: 0; color: "#f0b632" }
+                }
+                handle: Rectangle { x: lightTemperature.leftPadding + lightTemperature.visualPosition * (lightTemperature.availableWidth - width); y: lightTemperature.topPadding + lightTemperature.availableHeight / 2 - height / 2; implicitWidth: Style.space(12); implicitHeight: Style.space(18); radius: 0; color: Color.foreground; border.color: root.controlBorder }
+              }
+              Rectangle { width: parent.width; height: Style.space(32); radius: 0; color: root.controlFace; border.color: root.controlBorder
+                Text { anchors.centerIn: parent; text: lightProc.running ? "UPDATING…" : "REFRESH LIGHTS"; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
+                MouseArea { anchors.fill: parent; enabled: !lightProc.running; cursorShape: Qt.PointingHandCursor; onClicked: root.lightAction("refresh") }
+              }
+            }
           }
         }
 

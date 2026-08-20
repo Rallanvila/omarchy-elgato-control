@@ -131,6 +131,24 @@ class DeviceModelTests(unittest.TestCase):
             handler.redirect_request(request, None, 302, "Found", {}, "http://example.com/")
         caught.exception.close()
 
+    def test_individual_key_light_brightness_targets_only_selected_light(self):
+        lights = [{"host": "left.local"}, {"host": "right.local"}]
+        states = [{"reachable": True, "brightness": 40}, {"reachable": True, "brightness": 50}]
+        with mock.patch.object(module, "available_lights", return_value=lights), \
+             mock.patch.object(module, "light_states", side_effect=[states, states]), \
+             mock.patch.object(module, "light_request") as request:
+            module.control_lights("1", "brightness", 72)
+        request.assert_called_once_with(lights[1], {"brightness": 72, "on": 1})
+
+    def test_key_light_temperature_converts_kelvin_to_device_mireds(self):
+        lights = [{"host": "left.local"}]
+        states = [{"reachable": True, "temperature": 200}]
+        with mock.patch.object(module, "available_lights", return_value=lights), \
+             mock.patch.object(module, "light_states", side_effect=[states, states]), \
+             mock.patch.object(module, "light_request") as request:
+            module.control_lights("all", "temperature", 5000)
+        request.assert_called_once_with(lights[0], {"temperature": 200, "on": 1})
+
 
 class PedalParserTests(unittest.TestCase):
     def make_daemon(self):

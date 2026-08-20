@@ -168,6 +168,44 @@ def discover_lights(timeout=3):
         return []
     return parse_avahi_lights(output)
 
+def available_lights():
+    configured = load_profile().get("lights", [])
+    return configured or discover_lights()
+
+def light_states(lights):
+    states = []
+    for light in lights:
+        entry = dict(light)
+        try: entry.update(light_request(light)); entry["reachable"] = True
+        except Exception as error: entry["reachable"] = False; entry["error"] = str(error)
+        states.append(entry)
+    return states
+
+def control_lights(target, action, value=None):
+    if action in ("brightness", "temperature") and value is None: raise ValueError("Key Light value is required")
+    lights = available_lights()
+    states = light_states(lights)
+    if target == "all": indexes = list(range(len(lights)))
+    else:
+        index = int(target)
+        if index < 0 or index >= len(lights): raise ValueError("Key Light target is out of range")
+        indexes = [index]
+    changed = 0
+    for index in indexes:
+        if not states[index].get("reachable"): continue
+        current = states[index]
+        if action == "on": payload = {"on": 1}
+        elif action == "off": payload = {"on": 0}
+        elif action == "toggle": payload = {"on": 0 if current.get("on") else 1}
+        elif action == "brightness": payload = {"brightness": max(1, min(100, int(value))), "on": 1}
+        elif action == "temperature":
+            kelvin = max(2900, min(7000, int(value)))
+            payload = {"temperature": max(143, min(344, round(1000000 / kelvin))), "on": 1}
+        else: raise ValueError("Unsupported Key Light action")
+        light_request(lights[index], payload); changed += 1
+    if changed == 0: raise RuntimeError("No selected Key Lights are reachable")
+    return light_states(lights)
+
 def ensure_profile():
     CONFIG.mkdir(parents=True, exist_ok=True); STATE.mkdir(parents=True, exist_ok=True)
     if not PROFILE.exists():
@@ -652,6 +690,7 @@ def main():
     key = sub.add_parser("set-key"); key.add_argument("index", type=int, choices=range(1, 9)); key.add_argument("action")
     dial = sub.add_parser("set-dial"); dial.add_argument("index", type=int, choices=range(1, 5)); dial.add_argument("slot", choices=("left", "press", "right")); dial.add_argument("action")
     wave = sub.add_parser("wave"); wave.add_argument("action", choices=("gain-up", "gain-down", "mute", "headphone-up", "headphone-down", "headphone-mute", "preset-quiet", "preset-normal", "preset-loud", "default"))
+    lights = sub.add_parser("lights"); lights.add_argument("action", choices=("on", "off", "toggle", "brightness", "temperature", "refresh")); lights.add_argument("--target", default="all"); lights.add_argument("--value", type=int)
     status = sub.add_parser("status"); status.add_argument("--json", action="store_true")
     args = p.parse_args(); ensure_profile()
     if args.command == "init": print(PROFILE); return
@@ -678,6 +717,11 @@ def main():
         try: perform_wave_action(current, mapping[args.action])
         except (OSError, RuntimeError, subprocess.SubprocessError) as error: p.error(str(error))
         print(json.dumps(detect_wave())); return
+    if args.command == "lights":
+        try:
+            result = light_states(available_lights()) if args.action == "refresh" else control_lights(args.target, args.action, args.value)
+        except (OSError, RuntimeError, ValueError, urllib.error.URLError) as error: p.error(str(error))
+        print(json.dumps(result)); return
     if args.command == "status":
         data = json.loads(STATUS.read_text()) if STATUS.exists() else {"running": False, "plus": None, "pedal": None, "profile": load_profile().get("name", "Default")}
         print(json.dumps(data) if args.json else json.dumps(data, indent=2)); return
