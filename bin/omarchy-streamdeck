@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Small hidapi-based Stream Deck daemon for Omarchy."""
+import argparse, ctypes, json, os, pathlib, shutil, signal, subprocess, sys, time, urllib.request
+
+VID = 0x0FD9
+PLUS, PEDAL = 0x0084, 0x0086
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CONFIG = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")) / "omarchy-streamdeck"
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", pathlib.Path.home() / ".local/state")) / "omarchy-streamdeck"
+PROFILE = CONFIG / "profile.json"
+STATUS = STATE / "status.json"
+ICONS = ROOT / "assets" / "keys"
+
+class DeviceInfo(ctypes.Structure): pass
+DeviceInfo._fields_ = [("path", ctypes.c_char_p), ("vendor_id", ctypes.c_ushort),
+ ("product_id", ctypes.c_ushort), ("serial_number", ctypes.c_wchar_p),
+ ("release_number", ctypes.c_ushort), ("manufacturer_string", ctypes.c_wchar_p),
+ ("product_string", ctypes.c_wchar_p), ("usage_page", ctypes.c_ushort),
+ ("usage", ctypes.c_ushort), ("interface_number", ctypes.c_int),
+ ("next", ctypes.POINTER(DeviceInfo)), ("bus_type", ctypes.c_int)]
+
+class Hid:
+    def __init__(self):
+        for name in ("libhidapi-hidraw.so.0", "libhidapi-hidraw.so"):
+            try: self.lib = ctypes.CDLL(name); break
+            except OSError: self.lib = None
+        if not self.lib: raise RuntimeError("hidapi-hidraw is not installed")
+        self.lib.hid_enumerate.argtypes = [ctypes.c_ushort, ctypes.c_ushort]
+        self.lib.hid_enumerate.restype = ctypes.POINTER(DeviceInfo)
+        self.lib.hid_free_enumeration.argtypes = [ctypes.POINTER(DeviceInfo)]
+        self.lib.hid_open_path.argtypes = [ctypes.c_char_p]
+        self.lib.hid_open_path.restype = ctypes.c_void_p
+        self.lib.hid_set_nonblocking.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self.lib.hid_read_timeout.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t, ctypes.c_int]
+        self.lib.hid_send_feature_report.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t]
+        self.lib.hid_write.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t]
+        self.lib.hid_close.argtypes = [ctypes.c_void_p]
+        self.lib.hid_init()
+
+    def paths(self):
+        out, head = [], self.lib.hid_enumerate(VID, 0)
+        cur = head
+        while cur:
+            i = cur.contents
+            if i.product_id in (PLUS, PEDAL):
+                out.append({"path": i.path.decode(), "productId": i.product_id,
+                            "serial": i.serial_number or "", "product": i.product_string or "Elgato"})
+            cur = i.next
+        if head: self.lib.hid_free_enumeration(head)
+        return out
+
+    def open(self, path):
+        dev = self.lib.hid_open_path(path.encode())
+        if dev: self.lib.hid_set_nonblocking(dev, 1)
+        return dev
+
+    def read(self, dev):
+        buf = (ctypes.c_ubyte * 1024)()
+        n = self.lib.hid_read_timeout(dev, buf, len(buf), 0)
+        return bytes(buf[:n]) if n > 0 else b""
+
+    def feature(self, dev, values):
+        values = values + [0] * (32 - len(values))
+        buf = (ctypes.c_ubyte * len(values))(*values)
+        return self.lib.hid_send_feature_report(dev, buf, len(values))
+
+    def write(self, dev, values):
+        buf = (ctypes.c_ubyte * len(values))(*values)
+        return self.lib.hid_write(dev, buf, len(values))
+
+def light_request(light, payload=None):
+    url = "http://%s:%d/elgato/lights" % (light["host"], int(light.get("port", 9123)))
+    body = None if payload is None else json.dumps({"numberOfLights": 1, "lights": [payload]}).encode()
+    req = urllib.request.Request(url, data=body, method="GET" if body is None else "PUT",
+                                 headers={"Content-Type": "application/json", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=1.2) as response:
+        return json.loads(response.read().decode())["lights"][0]
+
+def ensure_profile():
+    CONFIG.mkdir(parents=True, exist_ok=True); STATE.mkdir(parents=True, exist_ok=True)
+    if not PROFILE.exists(): shutil.copyfile(ROOT / "defaults/profile.json", PROFILE)
+
+def load_profile():
+    ensure_profile()
+    with PROFILE.open() as f: return json.load(f)
+
+def write_status(data):
+    STATE.mkdir(parents=True, exist_ok=True)
+    tmp = STATUS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, STATUS)
+
+def command_for(action):
+    home = str(pathlib.Path.home())
+    return {
+      "terminal": ["uwsm-app", "--", "kitty"], "browser": ["omarchy", "launch", "browser"],
+      "files": ["uwsm-app", "--", "xdg-open", home], "mic_mute": ["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"],
+      "mic_up": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SOURCE@", "5%+"], "mic_down": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SOURCE@", "5%-"],
+      "volume_mute": ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"], "volume_up": ["wpctl", "set-volume", "-l", "1.5", "@DEFAULT_AUDIO_SINK@", "5%+"],
+      "volume_down": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"], "media_play_pause": ["playerctl", "play-pause"],
+      "screenshot": ["omarchy", "capture", "screenshot"], "lock": ["omarchy", "system", "lock"],
+      "omameet": ["omarchy-shell", "shell", "toggle", "acp.omameet"], "workspace_next": ["hyprctl", "dispatch", "workspace", "+1"],
+      "workspace_prev": ["hyprctl", "dispatch", "workspace", "-1"], "overview": ["hyprctl", "dispatch", "hyprexpo:expo", "toggle"]
+    }.get(action)
+
+class Daemon:
+    def __init__(self):
+        self.hid, self.devices, self.previous = Hid(), {}, {}
+        self.profile, self.mtime = load_profile(), PROFILE.stat().st_mtime
+        self.brightness = int(self.profile.get("brightness", 55))
+        self.light_states = []
+        self.running = True
+        self.status = {"running": True, "profile": self.profile.get("name", "Default"), "plus": None, "pedal": None,
+                       "lights": [], "lastAction": "", "lastEvent": "", "error": "", "updatedAt": int(time.time())}
+
+    def key_image(self, dev, index, action):
+        path = ICONS / (action + ".jpg")
+        if not path.exists(): return
+        data = path.read_bytes(); page = 0
+        for offset in range(0, len(data), 1016):
+            payload = data[offset:offset + 1016]; final = offset + len(payload) >= len(data)
+            header = [0x02, 0x07, index, 1 if final else 0, len(payload) & 255, len(payload) >> 8, page & 255, page >> 8]
+            self.hid.write(dev, header + list(payload) + [0] * (1016 - len(payload)))
+            page += 1
+
+    def decorate(self, dev):
+        self.hid.feature(dev, [0x03, 0x08, max(0, min(100, self.brightness))])
+        for i, key in enumerate(self.profile.get("keys", [])[:8]):
+            color = key.get("color", [40, 90, 130])
+            self.hid.feature(dev, [0x03, 0x06, i] + [int(x) & 255 for x in color[:3]])
+            self.key_image(dev, i, key.get("action", ""))
+
+    def connect(self):
+        found = self.hid.paths()
+        live = {x["path"] for x in found}
+        for path in list(self.devices):
+            if path not in live:
+                self.hid.lib.hid_close(self.devices.pop(path)["handle"])
+        for info in found:
+            if info["path"] not in self.devices:
+                handle = self.hid.open(info["path"])
+                if handle:
+                    self.devices[info["path"]] = dict(info, handle=handle)
+                    if info["productId"] == PLUS: self.decorate(handle)
+        for pid, key in ((PLUS, "plus"), (PEDAL, "pedal")):
+            value = next((d for d in self.devices.values() if d["productId"] == pid), None)
+            self.status[key] = ({k: value[k] for k in ("product", "serial", "path")} if value else None)
+
+    def act(self, action):
+        if not action: return
+        if action.startswith("lights_"):
+            self.act_lights(action)
+        elif action.startswith("brightness_"):
+            self.brightness = 55 if action == "brightness_reset" else max(0, min(100, self.brightness + (5 if action == "brightness_up" else -5)))
+            for d in self.devices.values():
+                if d["productId"] == PLUS: self.hid.feature(d["handle"], [0x03, 0x08, self.brightness])
+        else:
+            cmd = command_for(action)
+            if cmd:
+                try: subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError as e: self.status["error"] = str(e)
+            else: self.status["error"] = "Unknown action: " + action
+        self.status["lastAction"] = action; self.status["lastEvent"] = time.strftime("%H:%M:%S")
+
+    def refresh_lights(self):
+        states = []
+        for light in self.profile.get("lights", []):
+            entry = dict(light)
+            try: entry.update(light_request(light)); entry["reachable"] = True
+            except Exception as e: entry["reachable"] = False; entry["error"] = str(e)
+            states.append(entry)
+        self.light_states = states; self.status["lights"] = states
+
+    def act_lights(self, action):
+        if not self.light_states: self.refresh_lights()
+        reachable = [x for x in self.light_states if x.get("reachable")]
+        if not reachable: self.status["error"] = "No Elgato lights reachable"; return
+        current = reachable[0]
+        if action == "lights_toggle": payload = {"on": 0 if any(x.get("on") for x in reachable) else 1}
+        elif action == "lights_brightness_up": payload = {"brightness": min(100, int(current.get("brightness", 40)) + 5), "on": 1}
+        elif action == "lights_brightness_down": payload = {"brightness": max(1, int(current.get("brightness", 40)) - 5), "on": 1}
+        elif action == "lights_warmer": payload = {"temperature": min(344, int(current.get("temperature", 200)) + 10), "on": 1}
+        elif action == "lights_cooler": payload = {"temperature": max(143, int(current.get("temperature", 200)) - 10), "on": 1}
+        else: return
+        for light in self.profile.get("lights", []):
+            try: light_request(light, payload)
+            except Exception as e: self.status["error"] = "Light: " + str(e)
+        self.refresh_lights()
+
+    def parse_plus(self, data):
+        if len(data) < 5 or data[0] != 1: return
+        if data[1] == 0:
+            states = list(data[4:12]); old = self.previous.get("plus_keys", [0] * 8)
+            for i, state in enumerate(states):
+                if state and not old[i] and i < len(self.profile.get("keys", [])): self.act(self.profile["keys"][i].get("action"))
+            self.previous["plus_keys"] = states
+        elif data[1] == 3 and len(data) >= 9:
+            kind = data[4]
+            if kind == 0:
+                states = list(data[5:9]); old = self.previous.get("dial_keys", [0] * 4)
+                for i, state in enumerate(states):
+                    if state and not old[i] and i < len(self.profile.get("dials", [])): self.act(self.profile["dials"][i].get("press"))
+                self.previous["dial_keys"] = states
+            elif kind == 1:
+                for i, raw in enumerate(data[5:9]):
+                    tick = raw if raw < 128 else raw - 256
+                    if tick and i < len(self.profile.get("dials", [])):
+                        action = self.profile["dials"][i].get("right" if tick > 0 else "left")
+                        for _ in range(min(abs(tick), 5)): self.act(action)
+
+    def parse_pedal(self, data):
+        if len(data) < 5 or data[0] != 1: return
+        states = list(data[4:7]); old = self.previous.get("pedals", [0] * 3)
+        for i, state in enumerate(states):
+            if state and not old[i] and i < len(self.profile.get("pedals", [])): self.act(self.profile["pedals"][i].get("action"))
+        self.previous["pedals"] = states
+
+    def loop(self):
+        last_connect = last_status = last_lights = 0
+        while self.running:
+            now = time.monotonic()
+            if now - last_connect > 2: self.connect(); last_connect = now
+            if now - last_lights > 5: self.refresh_lights(); last_lights = now
+            try:
+                mtime = PROFILE.stat().st_mtime
+                if mtime != self.mtime: self.profile, self.mtime = load_profile(), mtime
+            except (OSError, ValueError, json.JSONDecodeError) as e: self.status["error"] = "Profile: " + str(e)
+            for d in list(self.devices.values()):
+                data = self.hid.read(d["handle"])
+                if data: self.parse_plus(data) if d["productId"] == PLUS else self.parse_pedal(data)
+            if now - last_status > .5:
+                self.status.update(running=True, brightness=self.brightness, profile=self.profile.get("name", "Default"), updatedAt=int(time.time()))
+                write_status(self.status); last_status = now
+            time.sleep(.025)
+        for d in self.devices.values(): self.hid.lib.hid_close(d["handle"])
+        self.status["running"] = False; write_status(self.status)
+
+def main():
+    p = argparse.ArgumentParser(); sub = p.add_subparsers(dest="command", required=True)
+    sub.add_parser("daemon"); sub.add_parser("init"); sub.add_parser("profile")
+    status = sub.add_parser("status"); status.add_argument("--json", action="store_true")
+    args = p.parse_args(); ensure_profile()
+    if args.command == "init": print(PROFILE); return
+    if args.command == "profile": print(json.dumps(load_profile(), indent=2)); return
+    if args.command == "status":
+        data = json.loads(STATUS.read_text()) if STATUS.exists() else {"running": False, "plus": None, "pedal": None, "profile": load_profile().get("name", "Default")}
+        print(json.dumps(data) if args.json else json.dumps(data, indent=2)); return
+    daemon = Daemon()
+    signal.signal(signal.SIGTERM, lambda *_: setattr(daemon, "running", False)); signal.signal(signal.SIGINT, lambda *_: setattr(daemon, "running", False))
+    daemon.loop()
+
+if __name__ == "__main__": main()
