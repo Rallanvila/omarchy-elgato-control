@@ -99,6 +99,24 @@ class DeviceModelTests(unittest.TestCase):
         with self.assertRaises(ValueError): module.validate_light_host("example.com")
         with self.assertRaises(ValueError): module.validate_light_host("8.8.8.8")
 
+    def test_key_light_resolution_rejects_public_and_loopback_addresses(self):
+        public = [(module.socket.AF_INET, module.socket.SOCK_STREAM, 6, "", ("8.8.8.8", 9123))]
+        loopback = [(module.socket.AF_INET, module.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 9123))]
+        private = [(module.socket.AF_INET, module.socket.SOCK_STREAM, 6, "", ("192.168.1.20", 9123))]
+        with mock.patch.object(module.socket, "getaddrinfo", return_value=public):
+            with self.assertRaises(ValueError): module.validate_light_resolution("key-light.local", 9123)
+        with mock.patch.object(module.socket, "getaddrinfo", return_value=loopback):
+            with self.assertRaises(ValueError): module.validate_light_resolution("key-light.local", 9123)
+        with mock.patch.object(module.socket, "getaddrinfo", return_value=private):
+            self.assertEqual({"192.168.1.20"}, module.validate_light_resolution("key-light.local", 9123))
+
+    def test_key_light_http_redirects_are_rejected(self):
+        handler = module.NoRedirectHandler()
+        request = module.urllib.request.Request("http://192.168.1.20:9123/elgato/lights")
+        with self.assertRaises(module.urllib.error.HTTPError) as caught:
+            handler.redirect_request(request, None, 302, "Found", {}, "http://example.com/")
+        caught.exception.close()
+
 
 class PedalParserTests(unittest.TestCase):
     def make_daemon(self):

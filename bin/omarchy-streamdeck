@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Small hidapi-based Stream Deck daemon for Omarchy."""
-import argparse, ctypes, hashlib, ipaddress, json, os, pathlib, re, shutil, signal, subprocess, sys, tempfile, time, urllib.request
+import argparse, ctypes, hashlib, ipaddress, json, os, pathlib, re, shutil, signal, socket, subprocess, sys, tempfile, time, urllib.error, urllib.request
 
 VID = 0x0FD9
 PLUS, PEDAL = 0x0084, 0x0086
@@ -100,12 +100,21 @@ def light_request(light, payload=None):
     host = validate_light_host(light.get("host", ""))
     port = int(light.get("port", 9123))
     if port < 1 or port > 65535: raise ValueError("Invalid Key Light port")
-    url = "http://%s:%d/elgato/lights" % (host, port)
+    validate_light_resolution(host, port)
+    url_host = "[" + host + "]" if ":" in host else host
+    url = "http://%s:%d/elgato/lights" % (url_host, port)
     body = None if payload is None else json.dumps({"numberOfLights": 1, "lights": [payload]}).encode()
     req = urllib.request.Request(url, data=body, method="GET" if body is None else "PUT",
                                  headers={"Content-Type": "application/json", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=1.2) as response:
-        return json.loads(response.read().decode())["lights"][0]
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    with opener.open(req, timeout=1.2) as response:
+        data = response.read(65537)
+        if len(data) > 65536: raise ValueError("Key Light response is too large")
+        return json.loads(data.decode())["lights"][0]
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "Key Light redirects are not allowed", headers, fp)
 
 def validate_light_host(host):
     value = str(host).strip().rstrip(".")
@@ -117,6 +126,18 @@ def validate_light_host(host):
         if "must be private" in str(error): raise
     if re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}\.)*local", value, re.IGNORECASE): return value
     raise ValueError("Key Light host must be a private address or .local hostname")
+
+def validate_light_resolution(host, port):
+    try:
+        addresses = {item[4][0].split("%", 1)[0] for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
+    except socket.gaierror as error:
+        raise ValueError("Could not resolve Key Light host") from error
+    if not addresses: raise ValueError("Could not resolve Key Light host")
+    for value in addresses:
+        address = ipaddress.ip_address(value)
+        if not (address.is_private or address.is_link_local) or address.is_loopback or address.is_unspecified or address.is_multicast:
+            raise ValueError("Key Light host resolved outside the local network")
+    return addresses
 
 def parse_avahi_lights(text):
     """Parse resolved IPv4 _elg._tcp records emitted by avahi-browse."""
