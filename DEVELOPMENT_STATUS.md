@@ -1,8 +1,8 @@
 # Development status and handoff
 
-Last updated: 2026-08-19  
-Plugin version: 0.2.0  
-Status: working prototype; not store-ready
+Last updated: 2026-08-20
+Plugin version: 0.3.0
+Status: release candidate; marketplace validation pending
 
 ## Goal
 
@@ -30,6 +30,21 @@ Build an Omarchy Shell plugin that uses a Stream Deck as a native Linux control 
 - Added local HTTP state reads and grouped power, brightness, warmer, and cooler actions on port 9123.
 - Used `.local` names so DHCP address changes do not invalidate the profile.
 
+### 0.3.0 development pass
+
+- Added explicit per-device capabilities so Plus, Pedal, Wave, and light UI is conditional.
+- Added an 800×100 JPEG dial strip and the official Plus `0x02/0x0B` window-image upload protocol.
+- Added live LCD refresh after light and hardware-brightness changes.
+- Added automatic Wave:3 detection through PipeWire and targeted Wave source controls.
+- Added automatic `_elg._tcp` IPv4 discovery when no light hosts are pinned.
+- Added recent HID report diagnostics and parser regression tests for Pedal report variants.
+- Reworked the panel to omit absent hardware sections.
+- Added safe in-panel Pedal remapping for common keyboard keys and built-in actions; the middle pedal defaults to VOXtype push-to-talk.
+- Added searchable in-panel action pickers for every key, dial direction/press, and pedal, including dynamically discovered desktop applications.
+- Replaced the unusable all-controls-at-once matrix with a device preview and selected-control action inspector modeled on Elgato's editor flow.
+- Added black-background application key artwork generated from installed desktop icons, with custom built-in art and non-blank initial fallbacks.
+- Added native Wave:3 gain, microphone mute, headphone volume/mute, gain presets, default-source selection, and assignable Stream Deck actions.
+
 ## Hardware observed on the development machine
 
 | Device | Identifier | Verified result |
@@ -49,34 +64,15 @@ At the last check both lights were reachable, off, brightness 40, temperature 14
 | `~/.config/omarchy-streamdeck/profile.json` | Mutable user profile |
 | `~/.local/state/omarchy-streamdeck/status.json` | Daemon status read by the panel |
 
-## Known issues and remaining work
+## Known limitations and future work
 
-1. **Physical action verification is incomplete.** Connections, image writes, and light reads are confirmed. Every key, dial direction/press, pedal, and light mutation needs a recorded manual test pass.
-2. **No touch-strip support.** Tap, drag, flick, and touchscreen rendering are not implemented.
-3. **Profile reload does not redecorate hardware.** Actions reload, but artwork, colors, and initial brightness require reconnect or daemon restart.
-4. **No runtime light discovery.** Avahi discovery was manual; configured example hostnames are machine-specific.
-5. **Light HTTP blocks the HID loop.** Move polling and mutations to a worker or asynchronous queue.
-6. **Grouped-light behavior is simplistic.** Toggle turns all off if any is on; changes derive from the first reachable light.
-7. **Errors are sticky.** Successful operations should clear transient errors and preserve per-device detail.
-8. **Device coverage is narrow.** Only Plus and Pedal IDs/report shapes are supported.
-9. **Pedal parsing needs real captured-report fixtures.**
-10. **No automated tests.** Add parser, edge-trigger, packetization, configuration, light payload, reconnect, and recovery tests plus a non-action hardware smoke test.
-11. **No profile schema/validation.** Invalid actions, colors, hosts, ports, or array lengths fail late.
-12. **Actions are hard-coded.** Add a documented safe registry and optional command arrays without a shell.
-13. **Icon builds are not reproducible.** JPEGs are committed, but source/build metadata is missing.
-14. **Prerequisites are not checked.** Validate hidapi, hidraw permissions, Avahi, `wpctl`, `playerctl`, and Omarchy commands.
-15. **Panel is read-only.** Add clickable/per-light controls, discovery, and remapping.
-16. **No release process.** Add CI, screenshots, clean-machine testing, release notes, and store metadata.
-
-## Recommended 0.3.0 milestone
-
-1. Add tests and captured HID fixtures.
-2. Make light networking asynchronous.
-3. Add runtime mDNS discovery and merge it with configured names.
-4. Redecorate on profile changes.
-5. Add touchscreen status and controls.
-6. Record the full physical control matrix.
-7. Add clickable light controls to the panel.
+1. Touchscreen tap, press, and flick input is not mapped yet; the Plus window currently provides dial feedback.
+2. Key Light polling and mutations are synchronous and can briefly delay HID processing when a configured light is unreachable.
+3. Grouped-light changes derive their next brightness and temperature from the first reachable light.
+4. Only the Stream Deck Plus and Stream Deck Pedal HID report layouts have been verified.
+5. Profile shape validation is partial; panel-selected actions are validated, but hand-edited colors and array lengths are not schema checked.
+6. Wave vendor-only controls such as Clipguard and low-cut filters are not exposed by ALSA and are not implemented.
+7. Packetization, reconnect, and unreachable-device recovery need broader automated coverage despite the current hardware test pass.
 
 ## Validation commands used
 

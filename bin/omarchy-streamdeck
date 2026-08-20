@@ -1,15 +1,41 @@
 #!/usr/bin/env python3
 """Small hidapi-based Stream Deck daemon for Omarchy."""
-import argparse, ctypes, json, os, pathlib, shutil, signal, subprocess, sys, time, urllib.request
+import argparse, ctypes, hashlib, ipaddress, json, os, pathlib, re, shutil, signal, subprocess, sys, tempfile, time, urllib.request
 
 VID = 0x0FD9
 PLUS, PEDAL = 0x0084, 0x0086
+DEVICE_SPECS = {
+    PLUS: {"kind": "streamdeck", "capabilities": ["keys", "dials", "dialPress", "lcd", "touch", "brightness"]},
+    PEDAL: {"kind": "pedal", "capabilities": ["pedals"]},
+}
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CONFIG = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")) / "omarchy-streamdeck"
 STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", pathlib.Path.home() / ".local/state")) / "omarchy-streamdeck"
 PROFILE = CONFIG / "profile.json"
 STATUS = STATE / "status.json"
 ICONS = ROOT / "assets" / "keys"
+KEY_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "omarchy-streamdeck" / "keys"
+KEY_ACTIONS = {
+    "key_home": "Home", "key_end": "End", "key_page_up": "Page_Up", "key_page_down": "Page_Down",
+    "key_left": "Left", "key_right": "Right", "key_up": "Up", "key_down": "Down",
+    "key_enter": "Return", "key_escape": "Escape", "key_space": "space", "key_tab": "Tab",
+}
+BUILTIN_ACTIONS = [
+    ("terminal", "Open Terminal"), ("browser", "Open Default Browser"), ("files", "Open Files"),
+    ("mic_mute", "Mute Microphone"), ("media_play_pause", "Play / Pause"),
+    ("screenshot", "Screenshot"), ("lock", "Lock Screen"), ("omameet", "Open OmaMeet"),
+    ("workspace_prev", "Previous Workspace"), ("workspace_next", "Next Workspace"),
+    ("overview", "Workspace Overview"), ("volume_down", "Volume Down"), ("volume_up", "Volume Up"),
+    ("volume_mute", "Mute Output"), ("mic_down", "Microphone Down"), ("mic_up", "Microphone Up"),
+    ("lights_toggle", "Toggle Key Lights"), ("lights_brightness_down", "Key Lights Dimmer"),
+    ("lights_brightness_up", "Key Lights Brighter"), ("lights_warmer", "Key Lights Warmer"),
+    ("lights_cooler", "Key Lights Cooler"), ("voxtype_push_to_talk", "VOXtype Push-to-talk"),
+    ("wave_gain_down", "Wave Gain Down"), ("wave_gain_up", "Wave Gain Up"),
+    ("wave_mute", "Wave Microphone Mute"), ("wave_headphone_down", "Wave Headphones Down"),
+    ("wave_headphone_up", "Wave Headphones Up"), ("wave_headphone_mute", "Wave Headphones Mute"),
+    ("wave_preset_quiet", "Wave Preset · Quiet Room"), ("wave_preset_normal", "Wave Preset · Normal"),
+    ("wave_preset_loud", "Wave Preset · Loud Environment"),
+]
 
 class DeviceInfo(ctypes.Structure): pass
 DeviceInfo._fields_ = [("path", ctypes.c_char_p), ("vendor_id", ctypes.c_ushort),
@@ -42,9 +68,11 @@ class Hid:
         cur = head
         while cur:
             i = cur.contents
-            if i.product_id in (PLUS, PEDAL):
+            if i.product_id in DEVICE_SPECS:
                 out.append({"path": i.path.decode(), "productId": i.product_id,
-                            "serial": i.serial_number or "", "product": i.product_string or "Elgato"})
+                            "serial": i.serial_number or "", "product": i.product_string or "Elgato",
+                            "kind": DEVICE_SPECS[i.product_id]["kind"],
+                            "capabilities": DEVICE_SPECS[i.product_id]["capabilities"]})
             cur = i.next
         if head: self.lib.hid_free_enumeration(head)
         return out
@@ -69,12 +97,54 @@ class Hid:
         return self.lib.hid_write(dev, buf, len(values))
 
 def light_request(light, payload=None):
-    url = "http://%s:%d/elgato/lights" % (light["host"], int(light.get("port", 9123)))
+    host = validate_light_host(light.get("host", ""))
+    port = int(light.get("port", 9123))
+    if port < 1 or port > 65535: raise ValueError("Invalid Key Light port")
+    url = "http://%s:%d/elgato/lights" % (host, port)
     body = None if payload is None else json.dumps({"numberOfLights": 1, "lights": [payload]}).encode()
     req = urllib.request.Request(url, data=body, method="GET" if body is None else "PUT",
                                  headers={"Content-Type": "application/json", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=1.2) as response:
         return json.loads(response.read().decode())["lights"][0]
+
+def validate_light_host(host):
+    value = str(host).strip().rstrip(".")
+    try:
+        address = ipaddress.ip_address(value)
+        if address.is_private or address.is_link_local: return value
+        raise ValueError("Key Light address must be private or link-local")
+    except ValueError as error:
+        if "must be private" in str(error): raise
+    if re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}\.)*local", value, re.IGNORECASE): return value
+    raise ValueError("Key Light host must be a private address or .local hostname")
+
+def parse_avahi_lights(text):
+    """Parse resolved IPv4 _elg._tcp records emitted by avahi-browse."""
+    found = {}
+    for line in text.splitlines():
+        if not line.startswith("="): continue
+        parts = line.split(";")
+        if len(parts) < 9 or parts[2] != "IPv4": continue
+        host = parts[7].strip()
+        if not host: continue
+        name = re.sub(r"\\(\d{3})", lambda match: chr(int(match.group(1))), parts[3]).strip()
+        try: port = int(parts[8])
+        except ValueError: port = 9123
+        found[host] = {"name": name or "Key Light", "host": host, "port": port}
+    return sorted(found.values(), key=lambda item: item["host"])
+
+def discover_lights(timeout=3):
+    executable = shutil.which("avahi-browse")
+    if not executable: return []
+    try:
+        result = subprocess.run([executable, "-tpr", "_elg._tcp"], capture_output=True, text=True, timeout=timeout)
+        output = result.stdout or ""
+    except subprocess.TimeoutExpired as error:
+        output = error.stdout or ""
+        if isinstance(output, bytes): output = output.decode("utf-8", "replace")
+    except OSError:
+        return []
+    return parse_avahi_lights(output)
 
 def ensure_profile():
     CONFIG.mkdir(parents=True, exist_ok=True); STATE.mkdir(parents=True, exist_ok=True)
@@ -84,24 +154,267 @@ def load_profile():
     ensure_profile()
     with PROFILE.open() as f: return json.load(f)
 
+def save_profile(profile):
+    CONFIG.mkdir(parents=True, exist_ok=True)
+    tmp = PROFILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(profile, indent=2) + "\n")
+    os.replace(tmp, PROFILE)
+
+def desktop_applications():
+    applications = {}
+    roots = [pathlib.Path("/usr/share/applications"), pathlib.Path.home() / ".local/share/applications"]
+    for directory in roots:
+        if not directory.is_dir(): continue
+        for path in directory.glob("*.desktop"):
+            try:
+                values = {}
+                for line in path.read_text(errors="replace").splitlines():
+                    if "=" in line and not line.startswith((" ", "#")):
+                        key, value = line.split("=", 1)
+                        if key in ("Name", "Type", "NoDisplay", "Hidden") and key not in values: values[key] = value.strip()
+                if values.get("Type", "Application") != "Application": continue
+                if values.get("NoDisplay", "false").lower() == "true" or values.get("Hidden", "false").lower() == "true": continue
+                desktop_id = path.stem
+                if re.fullmatch(r"[A-Za-z0-9_.+-]+", desktop_id) and values.get("Name"):
+                    applications[desktop_id] = values["Name"]
+            except OSError: continue
+    return sorted(applications.items(), key=lambda item: item[1].lower())
+
+def desktop_entry(desktop_id):
+    if not re.fullmatch(r"[A-Za-z0-9_.+-]+", desktop_id): return {}
+    for directory in (pathlib.Path.home() / ".local/share/applications", pathlib.Path("/usr/share/applications")):
+        path = directory / (desktop_id + ".desktop")
+        if not path.is_file(): continue
+        values = {}
+        try:
+            for line in path.read_text(errors="replace").splitlines():
+                if "=" in line and not line.startswith((" ", "#")):
+                    key, value = line.split("=", 1)
+                    if key in ("Name", "Icon") and key not in values: values[key] = value.strip()
+        except OSError: return {}
+        values["desktopId"] = desktop_id; values["path"] = str(path)
+        return values
+    return {}
+
+def resolve_icon(icon):
+    if not icon: return ""
+    direct = pathlib.Path(icon)
+    if direct.is_file(): return str(direct)
+    names = [icon] if pathlib.Path(icon).suffix.lower() in (".svg", ".png", ".xpm", ".jpg", ".jpeg") else [icon + extension for extension in (".svg", ".png", ".xpm")]
+    roots = [pathlib.Path.home() / ".local/share/icons", pathlib.Path("/usr/share/icons/hicolor"), pathlib.Path("/usr/share/pixmaps")]
+    candidates = []
+    for root in roots:
+        if not root.is_dir(): continue
+        for name in names:
+            candidates.extend(root.glob("**/" + name))
+    if not candidates: return ""
+    def score(path):
+        text = str(path)
+        for rank, token in enumerate(("256x256", "128x128", "scalable", "512x512", "64x64", "48x48")):
+            if token in text: return rank
+        return 20
+    return str(sorted(candidates, key=score)[0])
+
+def action_icon(action):
+    built_in = ICONS / (action + ".jpg")
+    if built_in.is_file(): return str(built_in)
+    if action.startswith("app:"):
+        return resolve_icon(desktop_entry(action[4:]).get("Icon", ""))
+    return ""
+
+def action_catalog():
+    options = [{"value": action, "label": "Function · " + label, "icon": action_icon(action)} for action, label in BUILTIN_ACTIONS]
+    options.extend({"value": action, "label": "Key · " + action_label(action), "icon": action_icon(action)} for action in KEY_ACTIONS)
+    options.extend({"value": "app:" + desktop_id, "label": "Application · " + name,
+                    "icon": action_icon("app:" + desktop_id)}
+                   for desktop_id, name in desktop_applications())
+    return options
+
+def rendered_key_image(action, label, color):
+    existing = ICONS / (action + ".jpg")
+    if existing.is_file(): return existing
+    converter = shutil.which("magick") or shutil.which("convert")
+    if not converter: return None
+    source = action_icon(action)
+    source_stamp = str(pathlib.Path(source).stat().st_mtime_ns) if source and pathlib.Path(source).is_file() else "none"
+    digest = hashlib.sha256(json.dumps(["renderer-v3-black", action, label, source, source_stamp]).encode()).hexdigest()[:20]
+    KEY_CACHE.mkdir(parents=True, exist_ok=True)
+    output = KEY_CACHE / (digest + ".jpg")
+    if output.is_file(): return output
+    safe_label = str(label or action_label(action))[:16]
+    command = [converter, "-size", "120x120", "xc:#000000",
+               "-font", "/usr/share/fonts/noto/NotoSans-Regular.ttf"]
+    if source:
+        command += ["(", source, "-resize", "68x68", ")", "-gravity", "center", "-geometry", "+0-8", "-composite"]
+    else:
+        initials = "".join(word[0] for word in safe_label.split()[:2]).upper() or "?"
+        command += ["-fill", "white", "-pointsize", "34", "-gravity", "center", "-annotate", "+0-8", initials]
+    command += ["-fill", "white", "-pointsize", "11", "-gravity", "south", "-annotate", "+0+9", safe_label,
+                "-quality", "92", str(output)]
+    try: subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
+    except (OSError, subprocess.SubprocessError): return None
+    return output
+
+def desktop_file_exists(desktop_id):
+    if not re.fullmatch(r"[A-Za-z0-9_.+-]+", desktop_id): return False
+    return any((directory / (desktop_id + ".desktop")).is_file() for directory in
+               (pathlib.Path("/usr/share/applications"), pathlib.Path.home() / ".local/share/applications"))
+
+def valid_action(action):
+    if action in KEY_ACTIONS or any(action == item[0] for item in BUILTIN_ACTIONS): return True
+    return action.startswith("app:") and desktop_file_exists(action[4:])
+
+def set_control_action(kind, index, slot, action):
+    if not valid_action(action): raise ValueError("Unsupported action: " + action)
+    profile = load_profile()
+    controls = profile.get(kind, [])
+    if index < 0 or index >= len(controls): raise ValueError("Control index is out of range")
+    allowed = {"keys": ("action",), "pedals": ("action",), "dials": ("left", "press", "right")}
+    if kind not in allowed or slot not in allowed[kind]: raise ValueError("Invalid control slot")
+    controls[index][slot] = action
+    if slot == "action": controls[index]["label"] = action_label(action)
+    save_profile(profile)
+
+def set_pedal_action(index, action):
+    set_control_action("pedals", index, "action", action)
+
+def action_label(action):
+    if action == "voxtype_push_to_talk": return "VOXtype push-to-talk"
+    if action in KEY_ACTIONS: return KEY_ACTIONS[action].replace("_", " ")
+    if action.startswith("app:"):
+        return dict(desktop_applications()).get(action[4:], action[4:])
+    for value, label in BUILTIN_ACTIONS:
+        if value == action: return label
+    return action.replace("_", " ").title()
+
 def write_status(data):
     STATE.mkdir(parents=True, exist_ok=True)
     tmp = STATUS.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n")
     os.replace(tmp, STATUS)
 
-def command_for(action):
+def command_for(action, wave=None):
     home = str(pathlib.Path.home())
+    mic_target = str((wave or {}).get("sourceId", "@DEFAULT_AUDIO_SOURCE@"))
+    if action in KEY_ACTIONS: return ["wtype", "-k", KEY_ACTIONS[action]]
+    if action.startswith("app:") and desktop_file_exists(action[4:]):
+        return ["uwsm-app", "--", "gtk-launch", action[4:]]
     return {
       "terminal": ["uwsm-app", "--", "kitty"], "browser": ["omarchy", "launch", "browser"],
-      "files": ["uwsm-app", "--", "xdg-open", home], "mic_mute": ["wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"],
-      "mic_up": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SOURCE@", "5%+"], "mic_down": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SOURCE@", "5%-"],
+      "files": ["uwsm-app", "--", "xdg-open", home], "mic_mute": ["wpctl", "set-mute", mic_target, "toggle"],
+      "mic_up": ["wpctl", "set-volume", mic_target, "5%+"], "mic_down": ["wpctl", "set-volume", mic_target, "5%-"],
       "volume_mute": ["wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"], "volume_up": ["wpctl", "set-volume", "-l", "1.5", "@DEFAULT_AUDIO_SINK@", "5%+"],
-      "volume_down": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"], "media_play_pause": ["playerctl", "play-pause"],
+      "volume_down": ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-"], "media_play_pause": ["omarchy-shell", "media", "playPause"],
       "screenshot": ["omarchy", "capture", "screenshot"], "lock": ["omarchy", "system", "lock"],
+      "voxtype_push_to_talk": ["voxtype", "record", "start"],
       "omameet": ["omarchy-shell", "shell", "toggle", "acp.omameet"], "workspace_next": ["hyprctl", "dispatch", "workspace", "+1"],
       "workspace_prev": ["hyprctl", "dispatch", "workspace", "-1"], "overview": ["hyprctl", "dispatch", "hyprexpo:expo", "toggle"]
     }.get(action)
+
+def release_command_for(action):
+    if action == "voxtype_push_to_talk": return ["voxtype", "record", "stop"]
+    return None
+
+def detect_wave():
+    """Return a lightweight Wave device record when PipeWire exposes one."""
+    try:
+        result = subprocess.run(["wpctl", "status"], check=False, capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    names, source_id, sink_id, section = [], None, None, ""
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("├─ Sinks:") or stripped.startswith("├─ Sources:"):
+            section = "sinks" if "Sinks" in stripped else "sources"
+        if "Elgato Wave" in line:
+            name = line.split(". ", 1)[-1].split(" [", 1)[0].strip()
+            if name and name not in names: names.append(name)
+            try: node_id = int(line.split(".", 1)[0].split()[-1])
+            except (ValueError, IndexError): node_id = None
+            if section == "sources" and node_id is not None: source_id = node_id
+            if section == "sinks" and node_id is not None: sink_id = node_id
+    if not names: return None
+    card = None
+    if source_id is not None:
+        try:
+            inspect = subprocess.run(["wpctl", "inspect", str(source_id)], capture_output=True, text=True, timeout=2).stdout
+            match = re.search(r'alsa\.card\s*=\s*"?(\d+)', inspect)
+            if match: card = int(match.group(1))
+        except (OSError, subprocess.TimeoutExpired): pass
+    wave = {"product": names[0], "kind": "microphone", "capabilities": ["microphone", "mute", "gain", "headphones", "presets"],
+            "connected": True, "sourceId": source_id, "sinkId": sink_id, "card": card}
+    wave.update(read_wave_controls(card))
+    return wave
+
+def read_alsa_control(card, name):
+    if card is None: return None
+    try:
+        output = subprocess.run(["amixer", "-c", str(card), "cget", "name=" + name], capture_output=True,
+                                text=True, timeout=2).stdout
+    except (OSError, subprocess.TimeoutExpired): return None
+    value = re.search(r": values=([^\n]+)", output)
+    limits = re.search(r"min=(-?\d+),max=(-?\d+)", output)
+    if not value: return None
+    raw = value.group(1).strip()
+    if raw in ("on", "off"): return {"on": raw == "on"}
+    try: number = int(raw.split(",", 1)[0])
+    except ValueError: return None
+    low, high = (int(limits.group(1)), int(limits.group(2))) if limits else (0, 100)
+    return {"value": number, "min": low, "max": high, "percent": round((number - low) * 100 / max(1, high - low))}
+
+def read_wave_controls(card):
+    gain = read_alsa_control(card, "Mic Capture Volume") or {}
+    mic_switch = read_alsa_control(card, "Mic Capture Switch") or {}
+    headphones = read_alsa_control(card, "PCM Playback Volume") or {}
+    headphone_switch = read_alsa_control(card, "PCM Playback Switch") or {}
+    return {"gainRaw": gain.get("value"), "gainDb": round(gain.get("value", 0) / 2, 1) if gain else None,
+            "gainPercent": gain.get("percent"), "muted": not mic_switch.get("on", True),
+            "headphonePercent": headphones.get("percent"), "headphoneMuted": not headphone_switch.get("on", True)}
+
+def set_alsa_control(card, name, value):
+    if card is None: raise RuntimeError("Wave:3 ALSA card is unavailable")
+    result = subprocess.run(["amixer", "-q", "-c", str(card), "cset", "name=" + name, str(value)],
+                            capture_output=True, text=True, timeout=3)
+    if result.returncode != 0: raise RuntimeError(result.stderr.strip() or "Could not update Wave:3")
+
+def set_default_wave_source(source_id):
+    if source_id is None: raise RuntimeError("Wave:3 input is unavailable")
+    result = subprocess.run(["wpctl", "set-default", str(source_id)], capture_output=True, text=True, timeout=3)
+    if result.returncode != 0: raise RuntimeError(result.stderr.strip() or "Could not set default microphone")
+
+def perform_wave_action(wave, action):
+    if not wave: raise RuntimeError("Wave:3 is not connected")
+    card = wave.get("card")
+    if action == "wave_gain_up": set_alsa_control(card, "Mic Capture Volume", min(80, int(wave.get("gainRaw") or 0) + 2))
+    elif action == "wave_gain_down": set_alsa_control(card, "Mic Capture Volume", max(0, int(wave.get("gainRaw") or 0) - 2))
+    elif action == "wave_mute": set_alsa_control(card, "Mic Capture Switch", "toggle")
+    elif action == "wave_headphone_up": set_alsa_control(card, "PCM Playback Volume", "5%+")
+    elif action == "wave_headphone_down": set_alsa_control(card, "PCM Playback Volume", "5%-")
+    elif action == "wave_headphone_mute": set_alsa_control(card, "PCM Playback Switch", "toggle")
+    elif action == "wave_preset_quiet": set_alsa_control(card, "Mic Capture Volume", 60)  # 30 dB
+    elif action == "wave_preset_normal": set_alsa_control(card, "Mic Capture Volume", 40)  # 20 dB
+    elif action == "wave_preset_loud": set_alsa_control(card, "Mic Capture Volume", 20)  # 10 dB
+    elif action == "wave_default": set_default_wave_source(wave.get("sourceId"))
+    else: raise RuntimeError("Unknown Wave action: " + action)
+
+def lcd_svg(profile, brightness, light_states):
+    """Build a dependency-light dial strip; ImageMagick converts it to JPEG."""
+    dials = list(profile.get("dials", []))[:4]
+    lights = [x for x in light_states if x.get("reachable")]
+    light = lights[0] if lights else {}
+    values = ["System", "Input", "%s%%" % light.get("brightness", "--"),
+              "%sK" % round(1000000 / light["temperature"]) if light.get("temperature") else "--"]
+    colors = ["#38bdf8", "#f87171", "#fbbf24", "#fb923c"]
+    cells = []
+    for i in range(4):
+        label = dials[i].get("label", "Dial %d" % (i + 1)) if i < len(dials) else "Dial %d" % (i + 1)
+        label = (label[:22].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        x = i * 200
+        cells.append('<rect x="%d" y="0" width="198" height="100" rx="10" fill="#141820" stroke="#303846"/>' % x)
+        cells.append('<circle cx="%d" cy="50" r="27" fill="none" stroke="%s" stroke-width="6" stroke-dasharray="125 45"/>' % (x + 44, colors[i]))
+        cells.append('<text x="%d" y="47" fill="#f8fafc" font-size="18" font-family="sans-serif" font-weight="bold">%s</text>' % (x + 82, label))
+        cells.append('<text x="%d" y="72" fill="#94a3b8" font-size="16" font-family="sans-serif">%s</text>' % (x + 82, values[i]))
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="100"><rect width="800" height="100" fill="#090b10"/>%s</svg>' % "".join(cells)
 
 class Daemon:
     def __init__(self):
@@ -109,13 +422,18 @@ class Daemon:
         self.profile, self.mtime = load_profile(), PROFILE.stat().st_mtime
         self.brightness = int(self.profile.get("brightness", 55))
         self.light_states = []
+        self.discovered_lights = []
+        self.last_light_discovery = 0
+        self.lcd_signature = None
         self.running = True
         self.status = {"running": True, "profile": self.profile.get("name", "Default"), "plus": None, "pedal": None,
-                       "lights": [], "lastAction": "", "lastEvent": "", "error": "", "updatedAt": int(time.time())}
+                       "wave": None, "lights": [], "devices": [], "recentReports": {},
+                       "lastAction": "", "lastEvent": "", "error": "", "updatedAt": int(time.time())}
 
-    def key_image(self, dev, index, action):
-        path = ICONS / (action + ".jpg")
-        if not path.exists(): return
+    def key_image(self, dev, index, key):
+        action = key.get("action", "")
+        path = rendered_key_image(action, key.get("label", action_label(action)), key.get("color", [42, 54, 72]))
+        if not path or not path.exists(): return
         data = path.read_bytes(); page = 0
         for offset in range(0, len(data), 1016):
             payload = data[offset:offset + 1016]; final = offset + len(payload) >= len(data)
@@ -128,7 +446,36 @@ class Daemon:
         for i, key in enumerate(self.profile.get("keys", [])[:8]):
             color = key.get("color", [40, 90, 130])
             self.hid.feature(dev, [0x03, 0x06, i] + [int(x) & 255 for x in color[:3]])
-            self.key_image(dev, i, key.get("action", ""))
+            self.key_image(dev, i, key)
+        self.update_lcd(dev, force=True)
+
+    def update_lcd(self, dev, force=False):
+        signature = json.dumps({"dials": self.profile.get("dials", []), "lights": self.light_states,
+                                "brightness": self.brightness}, sort_keys=True, default=str)
+        if not force and signature == self.lcd_signature: return
+        converter = shutil.which("magick") or shutil.which("convert")
+        if not converter:
+            self.status["error"] = "LCD rendering requires ImageMagick"
+            return
+        try:
+            with tempfile.TemporaryDirectory(prefix="omarchy-streamdeck-lcd-") as directory:
+                svg = pathlib.Path(directory) / "lcd.svg"
+                jpg = pathlib.Path(directory) / "lcd.jpg"
+                svg.write_text(lcd_svg(self.profile, self.brightness, self.light_states))
+                subprocess.run([converter, str(svg), "-quality", "90", str(jpg)], check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                data = jpg.read_bytes()
+            page = 0
+            for offset in range(0, len(data), 1016):
+                payload = data[offset:offset + 1016]
+                final = offset + len(payload) >= len(data)
+                header = [0x02, 0x0B, 0, 1 if final else 0, len(payload) & 255,
+                          len(payload) >> 8, page & 255, page >> 8]
+                self.hid.write(dev, header + list(payload) + [0] * (1016 - len(payload)))
+                page += 1
+            self.lcd_signature = signature
+        except (OSError, subprocess.SubprocessError) as e:
+            self.status["error"] = "LCD: " + str(e)
 
     def connect(self):
         found = self.hid.paths()
@@ -144,32 +491,59 @@ class Daemon:
                     if info["productId"] == PLUS: self.decorate(handle)
         for pid, key in ((PLUS, "plus"), (PEDAL, "pedal")):
             value = next((d for d in self.devices.values() if d["productId"] == pid), None)
-            self.status[key] = ({k: value[k] for k in ("product", "serial", "path")} if value else None)
+            self.status[key] = ({k: value[k] for k in ("product", "serial", "path", "kind", "capabilities")} if value else None)
+        self.status["wave"] = detect_wave()
+        devices = [self.status[x] for x in ("plus", "pedal", "wave") if self.status.get(x)]
+        if self.status.get("lights"):
+            devices.append({"product": "Elgato Key Lights", "kind": "lights", "connected": True,
+                            "capabilities": ["lights", "power", "brightness", "temperature"],
+                            "count": len([x for x in self.status["lights"] if x.get("reachable")])})
+        self.status["devices"] = devices
 
     def act(self, action):
         if not action: return
-        if action.startswith("lights_"):
+        if action.startswith("wave_"):
+            try:
+                perform_wave_action(self.status.get("wave"), action)
+                self.status["wave"] = detect_wave()
+                self.status["error"] = ""
+            except (OSError, RuntimeError, subprocess.SubprocessError) as e: self.status["error"] = "Wave: " + str(e)
+        elif action.startswith("lights_"):
             self.act_lights(action)
         elif action.startswith("brightness_"):
             self.brightness = 55 if action == "brightness_reset" else max(0, min(100, self.brightness + (5 if action == "brightness_up" else -5)))
             for d in self.devices.values():
-                if d["productId"] == PLUS: self.hid.feature(d["handle"], [0x03, 0x08, self.brightness])
+                if d["productId"] == PLUS:
+                    self.hid.feature(d["handle"], [0x03, 0x08, self.brightness]); self.update_lcd(d["handle"])
         else:
-            cmd = command_for(action)
+            cmd = command_for(action, self.status.get("wave"))
             if cmd:
                 try: subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except OSError as e: self.status["error"] = str(e)
             else: self.status["error"] = "Unknown action: " + action
         self.status["lastAction"] = action; self.status["lastEvent"] = time.strftime("%H:%M:%S")
 
+    def release(self, action):
+        cmd = release_command_for(action)
+        if not cmd: return
+        try: subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e: self.status["error"] = str(e)
+        self.status["lastAction"] = action + " release"; self.status["lastEvent"] = time.strftime("%H:%M:%S")
+
     def refresh_lights(self):
+        configured = self.profile.get("lights", [])
+        if not configured and (not self.discovered_lights or time.monotonic() - self.last_light_discovery > 300):
+            self.discovered_lights = discover_lights()
+            self.last_light_discovery = time.monotonic()
         states = []
-        for light in self.profile.get("lights", []):
+        for light in configured or self.discovered_lights:
             entry = dict(light)
             try: entry.update(light_request(light)); entry["reachable"] = True
             except Exception as e: entry["reachable"] = False; entry["error"] = str(e)
             states.append(entry)
         self.light_states = states; self.status["lights"] = states
+        for d in self.devices.values():
+            if d["productId"] == PLUS: self.update_lcd(d["handle"])
 
     def act_lights(self, action):
         if not self.light_states: self.refresh_lights()
@@ -182,7 +556,7 @@ class Daemon:
         elif action == "lights_warmer": payload = {"temperature": min(344, int(current.get("temperature", 200)) + 10), "on": 1}
         elif action == "lights_cooler": payload = {"temperature": max(143, int(current.get("temperature", 200)) - 10), "on": 1}
         else: return
-        for light in self.profile.get("lights", []):
+        for light in self.profile.get("lights", []) or self.discovered_lights:
             try: light_request(light, payload)
             except Exception as e: self.status["error"] = "Light: " + str(e)
         self.refresh_lights()
@@ -209,10 +583,16 @@ class Daemon:
                         for _ in range(min(abs(tick), 5)): self.act(action)
 
     def parse_pedal(self, data):
-        if len(data) < 5 or data[0] != 1: return
-        states = list(data[4:7]); old = self.previous.get("pedals", [0] * 3)
+        if len(data) < 4 or data[0] != 1: return
+        # Pedal firmware uses the classic key report: report id, reserved,
+        # payload length, then three button bytes.
+        offset = 4 if len(data) >= 7 and data[3] == 0 else 3
+        states = list(data[offset:offset + 3]); old = self.previous.get("pedals", [0] * 3)
         for i, state in enumerate(states):
-            if state and not old[i] and i < len(self.profile.get("pedals", [])): self.act(self.profile["pedals"][i].get("action"))
+            if i >= len(self.profile.get("pedals", [])): continue
+            action = self.profile["pedals"][i].get("action")
+            if state and not old[i]: self.act(action)
+            elif not state and old[i]: self.release(action)
         self.previous["pedals"] = states
 
     def loop(self):
@@ -223,11 +603,17 @@ class Daemon:
             if now - last_lights > 5: self.refresh_lights(); last_lights = now
             try:
                 mtime = PROFILE.stat().st_mtime
-                if mtime != self.mtime: self.profile, self.mtime = load_profile(), mtime
+                if mtime != self.mtime:
+                    self.profile, self.mtime = load_profile(), mtime
+                    self.lcd_signature = None
+                    for device in self.devices.values():
+                        if device["productId"] == PLUS: self.decorate(device["handle"])
             except (OSError, ValueError, json.JSONDecodeError) as e: self.status["error"] = "Profile: " + str(e)
             for d in list(self.devices.values()):
                 data = self.hid.read(d["handle"])
-                if data: self.parse_plus(data) if d["productId"] == PLUS else self.parse_pedal(data)
+                if data:
+                    self.status["recentReports"][d["kind"]] = {"hex": data.hex(), "length": len(data), "at": int(time.time())}
+                    self.parse_plus(data) if d["productId"] == PLUS else self.parse_pedal(data)
             if now - last_status > .5:
                 self.status.update(running=True, brightness=self.brightness, profile=self.profile.get("name", "Default"), updatedAt=int(time.time()))
                 write_status(self.status); last_status = now
@@ -237,11 +623,37 @@ class Daemon:
 
 def main():
     p = argparse.ArgumentParser(); sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("daemon"); sub.add_parser("init"); sub.add_parser("profile")
+    sub.add_parser("daemon"); sub.add_parser("init"); sub.add_parser("profile"); sub.add_parser("catalog")
+    pedal = sub.add_parser("set-pedal"); pedal.add_argument("index", type=int, choices=(1, 2, 3)); pedal.add_argument("action")
+    key = sub.add_parser("set-key"); key.add_argument("index", type=int, choices=range(1, 9)); key.add_argument("action")
+    dial = sub.add_parser("set-dial"); dial.add_argument("index", type=int, choices=range(1, 5)); dial.add_argument("slot", choices=("left", "press", "right")); dial.add_argument("action")
+    wave = sub.add_parser("wave"); wave.add_argument("action", choices=("gain-up", "gain-down", "mute", "headphone-up", "headphone-down", "headphone-mute", "preset-quiet", "preset-normal", "preset-loud", "default"))
     status = sub.add_parser("status"); status.add_argument("--json", action="store_true")
     args = p.parse_args(); ensure_profile()
     if args.command == "init": print(PROFILE); return
     if args.command == "profile": print(json.dumps(load_profile(), indent=2)); return
+    if args.command == "catalog": print(json.dumps(action_catalog())); return
+    if args.command == "set-pedal":
+        try: set_pedal_action(args.index - 1, args.action)
+        except ValueError as error: p.error(str(error))
+        print(PROFILE); return
+    if args.command == "set-key":
+        try: set_control_action("keys", args.index - 1, "action", args.action)
+        except ValueError as error: p.error(str(error))
+        print(PROFILE); return
+    if args.command == "set-dial":
+        try: set_control_action("dials", args.index - 1, args.slot, args.action)
+        except ValueError as error: p.error(str(error))
+        print(PROFILE); return
+    if args.command == "wave":
+        mapping = {"gain-up": "wave_gain_up", "gain-down": "wave_gain_down", "mute": "wave_mute",
+                   "headphone-up": "wave_headphone_up", "headphone-down": "wave_headphone_down",
+                   "headphone-mute": "wave_headphone_mute", "preset-quiet": "wave_preset_quiet",
+                   "preset-normal": "wave_preset_normal", "preset-loud": "wave_preset_loud", "default": "wave_default"}
+        current = detect_wave()
+        try: perform_wave_action(current, mapping[args.action])
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error: p.error(str(error))
+        print(json.dumps(detect_wave())); return
     if args.command == "status":
         data = json.loads(STATUS.read_text()) if STATUS.exists() else {"running": False, "plus": None, "pedal": None, "profile": load_profile().get("name", "Default")}
         print(json.dumps(data) if args.json else json.dumps(data, indent=2)); return

@@ -22,6 +22,7 @@ BarWidget {
   implicitHeight: button.implicitHeight
   onBarChanged: injectPanel()
 
+
   Loader {
     id: panelLoader
     active: true
@@ -36,7 +37,7 @@ BarWidget {
     bar: root.bar
     text: ""
     dimmed: !root.connected
-    tooltipText: root.connected ? "Elgato Stream Deck · Connected" : "Elgato Stream Deck · Disconnected"
+    tooltipText: root.connected ? "Elgato Control · Connected" : "Elgato Control · Disconnected"
     iconComponent: Component {
       Image {
         anchors.centerIn: parent

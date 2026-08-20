@@ -1,21 +1,21 @@
 {
   "schemaVersion": 1,
   "id": "acp.streamdeck",
-  "name": "Elgato Stream Deck",
-  "version": "0.2.0",
+  "name": "Elgato Control",
+  "version": "0.3.0",
   "author": "Amit Patel",
   "license": "MIT",
-  "description": "Native Stream Deck and Elgato Key Light controls for Omarchy.",
+  "description": "Unofficial adaptive controls for Elgato Stream Deck, Pedal, Wave microphones, and Key Lights.",
   "kinds": ["bar-widget", "service"],
   "entryPoints": {
     "service": "Service.qml",
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Stream Deck",
-    "description": "Control an Elgato Stream Deck Plus and Stream Deck Pedal",
+    "displayName": "Elgato Control",
+    "description": "Control detected Elgato Stream Deck, Pedal, Wave, and Key Light hardware",
     "category": "System",
-    "aliases": ["elgato", "streamdeck", "controls", "pedal"],
+    "aliases": ["elgato", "streamdeck", "controls", "pedal", "wave", "keylight"],
     "allowMultiple": false,
     "defaultSection": "right"
   }

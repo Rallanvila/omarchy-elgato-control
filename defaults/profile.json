@@ -20,7 +20,7 @@
   ],
   "pedals": [
     {"label": "Mic mute", "action": "mic_mute"},
-    {"label": "Play/Pause", "action": "media_play_pause"},
+    {"label": "VOXtype push-to-talk", "action": "voxtype_push_to_talk"},
     {"label": "Capture", "action": "screenshot"}
   ]
 }
