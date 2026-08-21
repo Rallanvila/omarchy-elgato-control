@@ -107,6 +107,21 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual([{"name": "Key Light Left", "host": "192.0.2.2", "port": 9123}],
                          module.parse_avahi_lights(output))
 
+    def test_key_light_names_cannot_carry_rich_text_markup(self):
+        output = "=;eth0;IPv4;<img\\032src=\"https://evil.example/x\">;_elg._tcp;local;left.local;192.0.2.2;9123;"
+        lights = module.parse_avahi_lights(output)
+        self.assertEqual("‹img src=\"https://evil.example/x\"›", lights[0]["name"])
+        self.assertNotIn("<", lights[0]["name"])
+        self.assertNotIn(">", lights[0]["name"])
+
+    def test_http_status_cannot_overwrite_key_light_name_with_markup(self):
+        light = {"name": "Desk", "host": "192.168.1.20"}
+        with mock.patch.object(module, "light_request", return_value={
+            "on": 1, "brightness": 40, "temperature": 200, "name": "<b>hijack</b>",
+        }):
+            state = module.light_states([light])[0]
+        self.assertEqual("Desk", state["name"])
+
     def test_key_light_hosts_are_local_only(self):
         self.assertEqual("key-light.local", module.validate_light_host("key-light.local."))
         self.assertEqual("192.168.1.20", module.validate_light_host("192.168.1.20"))
@@ -173,6 +188,25 @@ class PedalParserTests(unittest.TestCase):
         daemon = self.make_daemon()
         daemon.parse_pedal(bytes([1, 0, 3, 0, 0, 1, 0]))
         self.assertEqual(["middle"], daemon.actions)
+
+
+class QmlPlainTextTests(unittest.TestCase):
+    PANEL = pathlib.Path(__file__).parents[1] / "Panel.qml"
+
+    def test_network_controlled_qml_text_forces_plain_text(self):
+        """Key Light names and other external strings must not use AutoText."""
+        panel = self.PANEL.read_text()
+        bindings = (
+            "text: modelData.name; textFormat: Text.PlainText",
+            "root.selectedLightName(); textFormat: Text.PlainText",
+            "root.status.wave.product : \"Wave microphone\"; textFormat: Text.PlainText",
+            "root.status.profile || \"Omarchy Default\"; textFormat: Text.PlainText",
+            "text: modelData.label; textFormat: Text.PlainText",
+            "root.actionName(modelData.action); textFormat: Text.PlainText",
+            'text: root.error || root.status.error || ""; textFormat: Text.PlainText',
+        )
+        for binding in bindings:
+            self.assertIn(binding, panel, f"untrusted QML binding lacks PlainText: {binding}")
 
 
 if __name__ == "__main__":

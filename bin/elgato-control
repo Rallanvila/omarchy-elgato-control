@@ -38,6 +38,10 @@ BUILTIN_ACTIONS = [
     ("wave_preset_loud", "Wave Preset · Loud Environment"),
 ]
 
+def plain_text(value, fallback=""):
+    """Keep device- and network-controlled labels out of QML AutoText."""
+    return str(value or fallback).replace("<", "‹").replace(">", "›")
+
 class DeviceInfo(ctypes.Structure): pass
 DeviceInfo._fields_ = [("path", ctypes.c_char_p), ("vendor_id", ctypes.c_ushort),
  ("product_id", ctypes.c_ushort), ("serial_number", ctypes.c_wchar_p),
@@ -152,7 +156,7 @@ def parse_avahi_lights(text):
         name = re.sub(r"\\(\d{3})", lambda match: chr(int(match.group(1))), parts[3]).strip()
         try: port = int(parts[8])
         except ValueError: port = 9123
-        found[host] = {"name": name or "Key Light", "host": host, "port": port}
+        found[host] = {"name": plain_text(name, "Key Light"), "host": host, "port": port}
     return sorted(found.values(), key=lambda item: item["host"])
 
 def discover_lights(timeout=3):
@@ -176,8 +180,10 @@ def light_states(lights):
     states = []
     for light in lights:
         entry = dict(light)
+        advertised = light.get("name")
         try: entry.update(light_request(light)); entry["reachable"] = True
         except Exception as error: entry["reachable"] = False; entry["error"] = str(error)
+        entry["name"] = plain_text(advertised or entry.get("name"), "Key Light")
         states.append(entry)
     return states
 
@@ -287,7 +293,7 @@ def action_icon(action):
 def action_catalog():
     options = [{"value": action, "label": "Function · " + label, "icon": action_icon(action)} for action, label in BUILTIN_ACTIONS]
     options.extend({"value": action, "label": "Key · " + action_label(action), "icon": action_icon(action)} for action in KEY_ACTIONS)
-    options.extend({"value": "app:" + desktop_id, "label": "Application · " + name,
+    options.extend({"value": "app:" + desktop_id, "label": "Application · " + plain_text(name),
                     "icon": action_icon("app:" + desktop_id)}
                    for desktop_id, name in desktop_applications())
     return options

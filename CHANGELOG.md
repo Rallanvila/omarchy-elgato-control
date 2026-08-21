@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-08-20
+
+- Force `Text.PlainText` for Key Light names and other externally supplied panel strings so QML AutoText cannot load markup or remote resources.
+- Sanitize mDNS Key Light names before they enter status JSON, and keep HTTP light payloads from overwriting the advertised name.
+
 ## 0.3.0 — 2026-08-20
 
 - Rename the application to Elgato Control for its multi-device scope.

@@ -169,7 +169,7 @@ Panel {
           Column {
             width: parent.width - Style.space(120)
             Text { text: "Elgato Control"; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 16; font.bold: true }
-            Text { text: root.status.profile || "Omarchy Default"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 11 }
+            Text { text: root.status.profile || "Omarchy Default"; textFormat: Text.PlainText; color: Color.muted; font.family: Style.font.family; font.pixelSize: 11 }
           }
           Text { text: root.connected ? "Connected" : "Disconnected"; color: root.connected ? Color.accent : Color.muted; font.family: Style.font.family; font.pixelSize: 11 }
         }
@@ -205,7 +205,7 @@ Panel {
                     Column { anchors.centerIn: parent; width: parent.width - Style.space(10); spacing: Style.space(3)
                       Text { anchors.horizontalCenter: parent.horizontalCenter; text: index + 1; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9 }
                       Image { anchors.horizontalCenter: parent.horizontalCenter; width: Style.space(30); height: width; source: root.actionIcon(modelData.action); visible: source.toString() !== ""; fillMode: Image.PreserveAspectFit; smooth: true }
-                      Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: root.actionName(modelData.action); color: Color.foreground; font.family: Style.font.family; font.pixelSize: 9 }
+                      Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: root.actionName(modelData.action); textFormat: Text.PlainText; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 9 }
                     }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectControl("key", index) }
                   }
@@ -217,7 +217,7 @@ Panel {
                   width: parent.width; height: Style.space(42); radius: 0; color: Qt.rgba(0, 0, 0, .5); border.color: Qt.rgba(1, 1, 1, .15)
                   Row { anchors.fill: parent
                     Repeater { model: root.profile.dials || []
-                      Text { width: parent.width / 4; anchors.verticalCenter: parent.verticalCenter; horizontalAlignment: Text.AlignHCenter; text: modelData.label; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9; elide: Text.ElideRight }
+                      Text { width: parent.width / 4; anchors.verticalCenter: parent.verticalCenter; horizontalAlignment: Text.AlignHCenter; text: modelData.label; textFormat: Text.PlainText; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9; elide: Text.ElideRight }
                     }
                   }
                 }
@@ -250,7 +250,7 @@ Panel {
                   border.color: root.selectedIndex === index ? Color.accent : root.controlBorder
                   Column { anchors.centerIn: parent; width: parent.width - Style.space(12); spacing: Style.space(8)
                     Text { anchors.horizontalCenter: parent.horizontalCenter; text: ["LEFT", "MIDDLE", "RIGHT"][index]; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9; font.bold: true }
-                    Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; text: root.actionName(modelData.action); color: Color.foreground; font.family: Style.font.family; font.pixelSize: 11 }
+                    Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; text: root.actionName(modelData.action); textFormat: Text.PlainText; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 11 }
                   }
                   MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.selectedControl = "pedal"; root.selectedIndex = index } }
                 }
@@ -260,7 +260,7 @@ Panel {
             Column {
               visible: root.selectedDevice === "wave"; anchors.centerIn: parent; width: parent.width - Style.space(40); spacing: Style.space(12)
               Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰍬"; color: root.status.wave && root.status.wave.muted ? Color.urgent : Color.accent; font.family: Style.font.family; font.pixelSize: 54 }
-              Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.status.wave ? root.status.wave.product : "Wave microphone"; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 15; font.bold: true }
+              Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.status.wave ? root.status.wave.product : "Wave microphone"; textFormat: Text.PlainText; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 15; font.bold: true }
               Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.status.wave && root.status.wave.muted ? "MUTED" : "LIVE"; color: root.status.wave && root.status.wave.muted ? Color.urgent : Color.accent; font.family: Style.font.family; font.pixelSize: 10; font.bold: true }
               Rectangle { width: parent.width; height: Style.space(8); radius: 0; color: Qt.rgba(1, 1, 1, .08)
                 Rectangle { width: parent.width * ((root.status.wave && root.status.wave.gainPercent || 0) / 100); height: parent.height; radius: 0; color: Color.accent }
@@ -293,7 +293,7 @@ Panel {
                     border.width: root.selectedLightIndex === index ? 2 : 1; border.color: root.selectedLightIndex === index ? Color.accent : root.controlBorder
                     Column { anchors.centerIn: parent; width: parent.width - Style.space(8); spacing: Style.space(7)
                       Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰛨"; color: modelData.on ? "#f0b632" : Color.muted; font.family: Style.font.family; font.pixelSize: 30 }
-                      Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: modelData.name; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 10; font.bold: true }
+                      Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: modelData.name; textFormat: Text.PlainText; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 10; font.bold: true }
                       Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.reachable ? modelData.brightness + "% · " + Math.round(1000000 / modelData.temperature) + "K" : "Unavailable"; color: modelData.reachable ? Color.muted : Color.urgent; font.family: Style.font.family; font.pixelSize: 9 }
                     }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectedLightIndex = index }
@@ -307,7 +307,7 @@ Panel {
             width: parent.width * 0.39 - Style.space(14); spacing: Style.space(10)
             Text { text: "ACTION INSPECTOR"; color: Color.muted; font.family: Style.font.family; font.pixelSize: 10; font.bold: true }
             Text {
-              text: root.selectedDevice === "streamdeck" ? (root.selectedControl === "key" ? "Key " + (root.selectedIndex + 1) : "Dial " + (root.selectedIndex + 1)) : root.selectedDevice === "pedal" ? ["Left pedal", "Middle pedal", "Right pedal"][root.selectedIndex] : root.selectedDevice === "wave" ? "Wave:3" : root.selectedLightName()
+              text: root.selectedDevice === "streamdeck" ? (root.selectedControl === "key" ? "Key " + (root.selectedIndex + 1) : "Dial " + (root.selectedIndex + 1)) : root.selectedDevice === "pedal" ? ["Left pedal", "Middle pedal", "Right pedal"][root.selectedIndex] : root.selectedDevice === "wave" ? "Wave:3" : root.selectedLightName(); textFormat: Text.PlainText
               color: Color.foreground; font.family: Style.font.family; font.pixelSize: 15; font.bold: true
             }
             Text { visible: root.selectedDevice === "streamdeck" || root.selectedDevice === "pedal"; width: parent.width; wrapMode: Text.WordWrap; text: "Choose an application, system function, or key. Changes apply immediately."; color: Color.muted; font.family: Style.font.family; font.pixelSize: 10 }
@@ -404,8 +404,8 @@ Panel {
           }
         }
 
-        Text { visible: !!root.status.lastAction; text: "Last action: " + (root.status.lastAction || "") + " · " + (root.status.lastEvent || ""); color: Color.muted; font.family: Style.font.family; font.pixelSize: 10 }
-        Text { visible: root.error !== "" || !!root.status.error; text: root.error || root.status.error || ""; color: Color.urgent; font.family: Style.font.family; font.pixelSize: 11 }
+        Text { visible: !!root.status.lastAction; text: "Last action: " + (root.status.lastAction || "") + " · " + (root.status.lastEvent || ""); textFormat: Text.PlainText; color: Color.muted; font.family: Style.font.family; font.pixelSize: 10 }
+        Text { visible: root.error !== "" || !!root.status.error; text: root.error || root.status.error || ""; textFormat: Text.PlainText; color: Color.urgent; font.family: Style.font.family; font.pixelSize: 11 }
 
       }
     }

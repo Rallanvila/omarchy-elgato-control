@@ -3,7 +3,7 @@
 An unofficial native Omarchy Shell plugin for controlling supported Elgato
 hardware on Linux without the Elgato desktop application.
 
-Current version: **0.3.0**
+Current version: **0.3.1**
 
 ## Supported hardware
 

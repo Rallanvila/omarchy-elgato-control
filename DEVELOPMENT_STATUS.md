@@ -1,8 +1,8 @@
 # Development status and handoff
 
 Last updated: 2026-08-20
-Plugin version: 0.3.0
-Status: release candidate; marketplace validation pending
+Plugin version: 0.3.1
+Status: marketplace needs-fixes addressed; Key Light names render as plain text
 
 ## Goal
 
