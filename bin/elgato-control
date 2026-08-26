@@ -24,6 +24,9 @@ KEY_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / 
 # regular face, and the bundled tiles hide their own caption in this band.
 CAPTION_FONT = "/usr/share/fonts/noto/NotoSans-CondensedBold.ttf"
 BUILT_IN_ICON_CROP = "100%x68%+0+0"
+# Drop a PNG named after an action here to give it your own key art. Built-in
+# actions ship only eight pictograms, and nothing else has a way to get one.
+USER_ICONS = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local/share")) / "elgato-control" / "icons"
 KEY_ACTIONS = {
     "key_home": "Home", "key_end": "End", "key_page_up": "Page_Up", "key_page_down": "Page_Down",
     "key_left": "Left", "key_right": "Right", "key_up": "Up", "key_down": "Down",
@@ -254,6 +257,8 @@ def resolve_icon(icon):
     return str(sorted(candidates, key=score)[0])
 
 def action_icon(action):
+    override = USER_ICONS / (action.replace("app:", "app-") + ".png")
+    if override.is_file(): return str(override)
     built_in = ICONS / (action + ".jpg")
     if built_in.is_file(): return str(built_in)
     if action.startswith("app:"):
@@ -281,6 +286,24 @@ def wrapped_caption(text):
     if len(words) > 3: words = words[:2] + [" ".join(words[2:])]
     return "\n".join(words)
 
+def caption_layer(lines, box_width, box_height):
+    """Build the caption as one auto-fitted label: per line, stacked.
+
+    A single caption: block sizes the whole paragraph at once and carries its
+    own leading, which leaves two-line captions noticeably smaller than they
+    need to be. Fitting each line to its own box and appending them uses the
+    space properly.
+    """
+    line_height = max(6, box_height // len(lines))
+    layer = ["("]
+    for line in lines:
+        layer += ["(", "-background", "none", "-fill", "white", "-font", CAPTION_FONT,
+                  "-size", "%dx%d" % (box_width, line_height), "-gravity", "center",
+                  "label:" + line, ")"]
+    if len(lines) > 1: layer += ["-append"]
+    layer += [")"]
+    return layer
+
 def rendered_key_image(action, label, color, size=(120, 120)):
     """Render key art at the size the connected deck actually wants.
 
@@ -292,36 +315,36 @@ def rendered_key_image(action, label, color, size=(120, 120)):
     width, height = int(size[0]), int(size[1])
     converter = shutil.which("magick") or shutil.which("convert")
     if not converter: return None
-    built_in = ICONS / (action + ".jpg")
-    source = str(built_in) if built_in.is_file() else action_icon(action)
+    source = action_icon(action)
+    # Only the bundled pictograms carry a baked-in caption that needs cropping;
+    # an override or a desktop icon is already clean art.
+    bundled = source == str(ICONS / (action + ".jpg"))
     source_stamp = str(pathlib.Path(source).stat().st_mtime_ns) if source and pathlib.Path(source).is_file() else "none"
-    digest = hashlib.sha256(json.dumps(["renderer-v7-textfirst", action, label, source, source_stamp,
+    digest = hashlib.sha256(json.dumps(["renderer-v8-iconcaption", action, label, source, source_stamp,
                                         width, height]).encode()).hexdigest()[:20]
     KEY_CACHE.mkdir(parents=True, exist_ok=True)
     output = KEY_CACHE / (digest + ".jpg")
     if output.is_file(): return output
     caption = wrapped_caption(str(label or action_label(action))[:28].upper())
+    lines = caption.split("\n")
     pad = max(2, round(height * 0.042))
-    # A 96px key has no room for an icon and two large lines of text at once.
-    # Legibility is the point of a key, so a wrapped caption takes the whole
-    # face and the icon steps aside; single-word keys keep their art.
-    if "\n" in caption: source = ""
     command = [converter, "-size", "%dx%d" % (width, height), "xc:#000000"]
     if source:
-        art = max(8, round(height * 0.54))
+        # A wrapped caption needs the height more than the icon does, so the
+        # icon gives some back rather than the caption being squeezed.
+        wraps = len(lines) > 1
+        art = max(8, round(height * (0.44 if wraps else 0.54)))
         icon = ["(", source]
         # The bundled tiles bake their own caption into the bottom of the art,
         # so crop that band off rather than shrinking two captions onto one key.
-        if built_in.is_file(): icon += ["-gravity", "North", "-crop", BUILT_IN_ICON_CROP, "+repage"]
+        if bundled: icon += ["-gravity", "North", "-crop", BUILT_IN_ICON_CROP, "+repage"]
         icon += ["-fuzz", "8%", "-trim", "+repage", "-resize", "%dx%d" % (art, art), ")"]
         command += icon + ["-gravity", "north", "-geometry", "+0+%d" % pad, "-composite"]
-        caption_height = max(10, round(height * 0.42))
+        caption_height = max(10, round(height * (0.50 if wraps else 0.42)))
     else:
         caption_height = max(10, height - 2 * pad)
-    command += ["(", "-background", "none", "-fill", "white", "-font", CAPTION_FONT,
-                "-size", "%dx%d" % (max(10, width - 2 * pad), caption_height),
-                "-gravity", "center", "caption:" + caption, ")",
-                "-gravity", "south", "-geometry", "+0+%d" % pad, "-composite",
+    command += caption_layer(lines, max(10, width - 2 * pad), caption_height)
+    command += ["-gravity", "south", "-geometry", "+0+%d" % pad, "-composite",
                 "-quality", "92", str(output)]
     try: subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
     except (OSError, subprocess.SubprocessError): return None
@@ -627,10 +650,11 @@ class Daemon:
                 controls = self.profile.get(slot, [])
                 if index >= len(controls): continue
                 action = controls[index].get("action")
-                # Visual keys fire on press; pedals also fire a release so
-                # push-to-talk actions can stop cleanly.
+                # Press fires the action. Release only does anything for an
+                # action that defines one, so a push-to-talk key stops cleanly
+                # on a deck key and not just on a pedal.
                 if payload: self.act(action)
-                elif not info["visual"]: self.release(action)
+                else: self.release(action)
             elif kind == "dial":
                 dials = self.profile.get("dials", [])
                 if index >= len(dials): continue

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0
+
+- Fix push-to-talk on a deck key. Release was only dispatched for non-visual
+  devices, so `voxtype_push_to_talk` bound to a Stream Deck key ran
+  `record start` and never `record stop`. Release is now offered on every
+  device and does nothing for actions that define none.
+- Let a key carry an icon and a wrapped caption at the same time. A wrapped
+  caption previously took the whole key face and dropped the art, which is
+  backwards: the icon is what makes a key scannable at a glance.
+- Set each caption line as its own auto-fitted `label:` and append them,
+  rather than one `caption:` block. A single block sizes the whole paragraph
+  at once and carries its own leading, leaving two-line captions smaller than
+  the space allows.
+- Add user icon overrides. A PNG named after an action in
+  `$XDG_DATA_HOME/elgato-control/icons/` becomes that key's art. Only eight
+  built-in actions ship a pictogram, and nothing else had a way to get one.
+- Crop the baked caption only off the bundled pictograms, not off an override
+  or a desktop entry's icon, which are already clean art.
+
 ## 0.5.0
 
 - Rewrite key artwork around an auto-fitted caption. The label is now sized to

@@ -58,7 +58,23 @@ The first run creates `~/.config/elgato-control/profile.json`. Existing
 Elgato Control panel to configure keys, dials, and pedals. Changes and artwork
 apply automatically.
 
-### Requirements
+### Custom key art
+
+Built-in actions ship eight pictograms. To give any other action its own art,
+drop a PNG named after the action into
+`$XDG_DATA_HOME/elgato-control/icons/` (usually
+`~/.local/share/elgato-control/icons/`):
+
+```
+~/.local/share/elgato-control/icons/voxtype_push_to_talk.png
+~/.local/share/elgato-control/icons/overview.png
+```
+
+An `app:` action uses its desktop entry's `Icon=` unless an override named
+`app-<desktop-id>.png` exists. Overrides are used as-is, so supply art that
+already reads well on a black key.
+
+## Requirements
 
 - Omarchy 4 with Python 3
 - `python-elgato-streamdeck` for the device drivers, and Pillow for image conversion

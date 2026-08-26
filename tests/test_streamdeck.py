@@ -259,16 +259,26 @@ class KeyArtTests(unittest.TestCase):
 
     def test_single_word_key_keeps_its_icon(self):
         argv = self.render_argv("terminal", "Terminal")
-        self.assertIn("caption:TERMINAL", argv, "caption must be uppercased")
+        self.assertIn("label:TERMINAL", argv, "caption must be uppercased")
         self.assertTrue(any(str(module.ICONS) in str(item) for item in argv),
                         "a one-line label leaves room for the bundled art")
 
-    def test_wrapped_label_drops_the_icon_for_legibility(self):
-        # A 96px key cannot carry an icon and two large lines at once.
+    def test_wrapped_label_keeps_its_icon_and_stacks_its_lines(self):
+        # The icon is what makes a key scannable, so it survives a wrap; each
+        # line is fitted to its own box and appended rather than set as one
+        # caption: block, which would leave both lines smaller.
         argv = self.render_argv("terminal", "Test All")
-        self.assertIn("caption:TEST\nALL", argv)
-        self.assertFalse(any(str(module.ICONS) in str(item) for item in argv),
-                         "a wrapped caption takes the whole key face")
+        self.assertIn("label:TEST", argv)
+        self.assertIn("label:ALL", argv)
+        self.assertIn("-append", argv)
+        self.assertTrue(any(str(module.ICONS) in str(item) for item in argv),
+                        "a wrapped caption must not cost the key its icon")
+
+    def test_a_wrapped_caption_borrows_height_from_the_icon(self):
+        one_line = self.render_argv("terminal", "Terminal")
+        two_line = self.render_argv("terminal", "Test All")
+        self.assertIn("52x52", one_line)
+        self.assertIn("42x42", two_line)
 
     def test_bundled_art_is_cropped_so_its_baked_caption_is_not_reused(self):
         # assets/keys/*.jpg bake their own label into the bottom of the tile.
@@ -310,14 +320,31 @@ class ControlDispatchTests(unittest.TestCase):
         self.assertEqual(["left"], daemon.actions)
         self.assertEqual(["left"], daemon.releases)
 
-    def test_visual_key_fires_on_press_only(self):
+    def test_visual_key_acts_once_and_still_offers_a_release(self):
+        # A deck key used to skip release entirely, so voxtype_push_to_talk
+        # bound to one ran "record start" and never "record stop". Release is
+        # now offered on every device and no-ops unless the action defines one.
         deck = FakeDeck()
         daemon = self.make_daemon(deck)
         daemon._on_key(deck, 1, True)
         daemon._on_key(deck, 1, False)
         daemon.drain_events()
-        self.assertEqual(["browser"], daemon.actions)
-        self.assertEqual([], daemon.releases)
+        self.assertEqual(["browser"], daemon.actions, "press must fire exactly once")
+        self.assertEqual(["browser"], daemon.releases)
+        self.assertIsNone(module.release_command_for("browser"),
+                          "an action with no release must run nothing on key-up")
+
+    def test_push_to_talk_stops_from_a_deck_key(self):
+        deck = FakeDeck()
+        daemon = self.make_daemon(deck)
+        daemon.profile["keys"][1]["action"] = "voxtype_push_to_talk"
+        daemon._on_key(deck, 1, True)
+        daemon._on_key(deck, 1, False)
+        daemon.drain_events()
+        self.assertEqual(["voxtype_push_to_talk"], daemon.actions)
+        self.assertEqual(["voxtype_push_to_talk"], daemon.releases)
+        self.assertEqual(["voxtype", "record", "stop"],
+                         module.release_command_for("voxtype_push_to_talk"))
 
     def test_out_of_range_key_is_ignored(self):
         deck = FakeDeck()

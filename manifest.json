@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.amitcpatel.elgato-control",
   "name": "Elgato Control",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "Amit Patel",
   "license": "MIT",
   "description": "Unofficial adaptive controls for Elgato Stream Deck, Pedal, Wave microphones, and Key Lights.",
