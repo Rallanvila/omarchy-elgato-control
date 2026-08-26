@@ -3,12 +3,20 @@
 An unofficial native Omarchy Shell plugin for controlling supported Elgato
 hardware on Linux without the Elgato desktop application.
 
-Current version: **0.3.1**
+Current version: **0.4.0**
 
 ## Supported hardware
 
+Device support comes from
+[python-elgato-streamdeck](https://github.com/abcminiuser/python-elgato-streamdeck),
+so every Stream Deck its drivers cover works here. Key count, grid shape, and
+artwork size are read from the driver at connect time rather than hardcoded, so
+the panel and the key renderer adapt to whatever is plugged in.
+
+- Stream Deck XL (`0fd9:006C` / `0fd9:008F`): 32 keys in an 8×4 grid, 96×96 JPEG artwork
 - Stream Deck Plus (`0fd9:0084`): eight keys, four dials, 120×120 JPEG artwork, device brightness, and an 800×100 live dial LCD
-- Stream Deck Pedal (`0fd9:0086`): three pedal events
+- Stream Deck MK.2, Original, Original V2, Mini, Neo, and Studio
+- Stream Deck Pedal (`0fd9:0086`): three pedal events, with press and release
 - Elgato Key Light Neo: automatic mDNS discovery, grouped power, brightness, temperature, and live status
 - Wave:3: automatic PipeWire detection; microphone actions target the detected Wave source rather than an unrelated default microphone
 - Elgato bar icon and a visual configuration editor that applies changes at runtime
@@ -53,7 +61,8 @@ apply automatically.
 ### Requirements
 
 - Omarchy 4 with Python 3
-- `libhidapi-hidraw` for Stream Deck and Pedal hardware
+- `python-elgato-streamdeck` for the device drivers, and Pillow for image conversion
+- `libhidapi-hidraw`, which the driver library talks to for Stream Deck and Pedal hardware
 - ImageMagick for generated application artwork and Plus LCD rendering
 - PipeWire/WirePlumber and ALSA utilities for Wave controls
 - Avahi for automatic Key Light discovery
@@ -170,9 +179,10 @@ USB protocol can be implemented and tested safely.
 
 ## Development diagnostics
 
-The daemon records only the latest raw HID report shape for each connected
-control type in the local status file. This is intended for verifying new
-hardware mappings and contains no key labels, commands, or network credentials.
+The daemon records only the latest control event for each connected control
+type in the local status file: which control moved, its index, and its value.
+This is intended for verifying new hardware mappings and contains no key labels,
+commands, or network credentials.
 
 ```bash
 bin/elgato-control status --json | jq .recentReports

@@ -1,9 +1,28 @@
 import importlib.machinery
 import importlib.util
 import pathlib
+import queue
 import tempfile
 import unittest
 from unittest import mock
+
+
+class FakeDeck:
+    """Stands in for a python-elgato-streamdeck driver instance."""
+
+    def __init__(self, name="Stream Deck XL", ident="fake:0", keys=32, rows=4,
+                 columns=8, dials=0, visual=True, touch=False):
+        self._name, self._id, self._keys = name, ident, keys
+        self._rows, self._columns, self._dials = rows, columns, dials
+        self._visual, self._touch = visual, touch
+
+    def deck_type(self): return self._name
+    def id(self): return self._id
+    def key_count(self): return self._keys
+    def key_layout(self): return (self._rows, self._columns)
+    def dial_count(self): return self._dials
+    def is_visual(self): return self._visual
+    def is_touch(self): return self._touch
 
 
 SCRIPT = pathlib.Path(__file__).parents[1] / "bin" / "elgato-control"
@@ -14,14 +33,38 @@ loader.exec_module(module)
 
 
 class DeviceModelTests(unittest.TestCase):
+    def test_xl_reports_its_own_geometry(self):
+        info = module.deck_capabilities(FakeDeck())
+        self.assertEqual(32, info["keyCount"])
+        self.assertEqual((4, 8), (info["keyRows"], info["keyColumns"]))
+        self.assertEqual("streamdeck", info["kind"])
+        self.assertIn("keys", info["capabilities"])
+        self.assertIn("brightness", info["capabilities"])
+        for absent in ("pedals", "dials", "lcd"):
+            self.assertNotIn(absent, info["capabilities"])
+
     def test_plus_capabilities_are_optional_and_explicit(self):
-        caps = module.DEVICE_SPECS[module.PLUS]["capabilities"]
+        deck = FakeDeck(name="Stream Deck +", keys=8, rows=2, columns=4, dials=4, touch=True)
+        caps = module.deck_capabilities(deck)["capabilities"]
         self.assertIn("lcd", caps)
         self.assertIn("dials", caps)
+        self.assertIn("dialPress", caps)
         self.assertNotIn("pedals", caps)
 
     def test_pedal_capabilities_do_not_assume_lcd(self):
-        self.assertEqual(["pedals"], module.DEVICE_SPECS[module.PEDAL]["capabilities"])
+        deck = FakeDeck(name="Stream Deck Pedal", keys=3, rows=1, columns=3, visual=False)
+        info = module.deck_capabilities(deck)
+        self.assertEqual(["pedals"], info["capabilities"])
+        self.assertEqual("pedal", info["kind"])
+
+    def test_fit_profile_grows_and_trims_to_the_deck(self):
+        profile = {"keys": [{"label": "Terminal", "action": "terminal"}]}
+        grown = module.fit_profile(profile, 32)
+        self.assertEqual(32, len(grown["keys"]))
+        self.assertEqual("terminal", grown["keys"][0]["action"])
+        self.assertEqual("", grown["keys"][31]["action"])
+        self.assertEqual(6, len(module.fit_profile(grown, 6)["keys"]))
+        self.assertEqual(1, len(profile["keys"]), "fit_profile must not mutate its input")
 
     def test_lcd_svg_has_required_dimensions_and_labels(self):
         profile = {"dials": [{"label": "Volume"}, {"label": "Microphone"}]}
@@ -165,29 +208,73 @@ class DeviceModelTests(unittest.TestCase):
         request.assert_called_once_with(lights[0], {"temperature": 200, "on": 1})
 
 
-class PedalParserTests(unittest.TestCase):
-    def make_daemon(self):
+class ControlDispatchTests(unittest.TestCase):
+    def make_daemon(self, deck):
         daemon = module.Daemon.__new__(module.Daemon)
-        daemon.previous = {}
-        daemon.profile = {"pedals": [{"action": "left"}, {"action": "middle"}, {"action": "right"}]}
+        daemon.events = queue.Queue()
+        daemon.decks = {deck.id(): {"deck": deck, "info": module.deck_capabilities(deck)}}
+        daemon.profile = {
+            "keys": [{"action": "terminal"}, {"action": "browser"}],
+            "pedals": [{"action": "left"}, {"action": "middle"}, {"action": "right"}],
+            "dials": [{"left": "volume_down", "right": "volume_up", "press": "volume_mute"}],
+        }
+        daemon.status = {"recentReports": {}}
         daemon.actions = []
         daemon.releases = []
         daemon.act = daemon.actions.append
         daemon.release = daemon.releases.append
         return daemon
 
-    def test_three_byte_report_press_is_edge_triggered(self):
-        daemon = self.make_daemon()
-        daemon.parse_pedal(bytes([1, 0, 3, 1, 0, 0]))
-        daemon.parse_pedal(bytes([1, 0, 3, 1, 0, 0]))
-        daemon.parse_pedal(bytes([1, 0, 3, 0, 0, 0]))
+    def test_pedal_press_and_release_both_dispatch(self):
+        deck = FakeDeck(name="Stream Deck Pedal", keys=3, rows=1, columns=3, visual=False)
+        daemon = self.make_daemon(deck)
+        daemon._on_key(deck, 0, True)
+        daemon._on_key(deck, 0, False)
+        daemon.drain_events()
         self.assertEqual(["left"], daemon.actions)
         self.assertEqual(["left"], daemon.releases)
 
-    def test_legacy_padded_report_is_supported(self):
-        daemon = self.make_daemon()
-        daemon.parse_pedal(bytes([1, 0, 3, 0, 0, 1, 0]))
-        self.assertEqual(["middle"], daemon.actions)
+    def test_visual_key_fires_on_press_only(self):
+        deck = FakeDeck()
+        daemon = self.make_daemon(deck)
+        daemon._on_key(deck, 1, True)
+        daemon._on_key(deck, 1, False)
+        daemon.drain_events()
+        self.assertEqual(["browser"], daemon.actions)
+        self.assertEqual([], daemon.releases)
+
+    def test_out_of_range_key_is_ignored(self):
+        deck = FakeDeck()
+        daemon = self.make_daemon(deck)
+        daemon._on_key(deck, 31, True)
+        daemon.drain_events()
+        self.assertEqual([], daemon.actions)
+
+    def test_events_from_an_unknown_deck_are_dropped(self):
+        deck = FakeDeck()
+        daemon = self.make_daemon(deck)
+        daemon._on_key(FakeDeck(ident="ghost:1"), 0, True)
+        daemon.drain_events()
+        self.assertEqual([], daemon.actions)
+
+    @unittest.skipIf(module.DialEventType is None, "python-elgato-streamdeck is not installed")
+    def test_dial_turn_repeats_per_detent_and_is_capped(self):
+        deck = FakeDeck(name="Stream Deck +", keys=8, rows=2, columns=4, dials=4, touch=True)
+        daemon = self.make_daemon(deck)
+        daemon._on_dial(deck, 0, module.DialEventType.TURN, 3)
+        daemon._on_dial(deck, 0, module.DialEventType.TURN, -1)
+        daemon._on_dial(deck, 0, module.DialEventType.TURN, 99)
+        daemon.drain_events()
+        self.assertEqual(["volume_up"] * 3 + ["volume_down"] + ["volume_up"] * 5, daemon.actions)
+
+    @unittest.skipIf(module.DialEventType is None, "python-elgato-streamdeck is not installed")
+    def test_dial_push_is_edge_triggered(self):
+        deck = FakeDeck(name="Stream Deck +", keys=8, rows=2, columns=4, dials=4, touch=True)
+        daemon = self.make_daemon(deck)
+        daemon._on_dial(deck, 0, module.DialEventType.PUSH, True)
+        daemon._on_dial(deck, 0, module.DialEventType.PUSH, False)
+        daemon.drain_events()
+        self.assertEqual(["volume_mute"], daemon.actions)
 
 
 class QmlPlainTextTests(unittest.TestCase):

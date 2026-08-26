@@ -69,7 +69,10 @@ At the last check both lights were reachable, off, brightness 40, temperature 14
 1. Touchscreen tap, press, and flick input is not mapped yet; the Plus window currently provides dial feedback.
 2. Key Light polling and mutations are synchronous and can briefly delay HID processing when a configured light is unreachable.
 3. Grouped-light changes derive their next brightness and temperature from the first reachable light.
-4. Only the Stream Deck Plus and Stream Deck Pedal HID report layouts have been verified.
+4. Device I/O now runs through `python-elgato-streamdeck`, so every model it
+   ships a driver for is supported. Only the Stream Deck XL has been exercised
+   on hardware since the backend swap; Plus, Pedal, Mini, Neo, and Studio rely
+   on the library's own device coverage.
 5. Profile shape validation is partial; panel-selected actions are validated, but hand-edited colors and array lengths are not schema checked.
 6. Wave vendor-only controls such as Clipguard and low-cut filters are not exposed by ALSA and are not implemented.
 7. Packetization, reconnect, and unreachable-device recovery need broader automated coverage despite the current hardware test pass.

@@ -1,5 +1,12 @@
 # Third-party notices
 
+## python-elgato-streamdeck
+
+Device drivers and image conversion come from the MIT-licensed
+`python-elgato-streamdeck` by Dean Camera (abcminiuser),
+<https://github.com/abcminiuser/python-elgato-streamdeck>. It is an external
+runtime dependency; no source from it is vendored into this repository.
+
 ## Elgato icon
 
 The Elgato mark in `assets/elgato.svg` is derived from the MIT-licensed
