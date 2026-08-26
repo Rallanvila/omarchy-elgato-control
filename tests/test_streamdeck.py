@@ -233,6 +233,57 @@ class DeviceModelTests(unittest.TestCase):
         request.assert_called_once_with(lights[0], {"temperature": 200, "on": 1})
 
 
+class KeyArtTests(unittest.TestCase):
+    """The key face is the product; unreadable art is a defect, not a taste."""
+
+    def render_argv(self, action, label, size=(96, 96)):
+        """Return the ImageMagick argv the renderer would run for one key."""
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(module, "KEY_CACHE", pathlib.Path(directory)), \
+                 mock.patch.object(module, "subprocess") as fake:
+                fake.SubprocessError = Exception
+                module.rendered_key_image(action, label, [0, 0, 0], size=size)
+                self.assertTrue(fake.run.called, "renderer never invoked the converter")
+                return fake.run.call_args[0][0]
+
+    def test_caption_is_prewrapped_one_word_per_line(self):
+        # ImageMagick's caption: fits the box width and only wraps when forced,
+        # so "TEAMS MUTE" would render as one small line unless we break it.
+        self.assertEqual("TEAMS\nMUTE", module.wrapped_caption("TEAMS MUTE"))
+        self.assertEqual("LOCK", module.wrapped_caption("LOCK"))
+
+    def test_caption_never_exceeds_three_lines(self):
+        wrapped = module.wrapped_caption("ONE TWO THREE FOUR FIVE")
+        self.assertEqual(3, len(wrapped.split("\n")))
+        self.assertEqual("ONE\nTWO\nTHREE FOUR FIVE", wrapped)
+
+    def test_single_word_key_keeps_its_icon(self):
+        argv = self.render_argv("terminal", "Terminal")
+        self.assertIn("caption:TERMINAL", argv, "caption must be uppercased")
+        self.assertTrue(any(str(module.ICONS) in str(item) for item in argv),
+                        "a one-line label leaves room for the bundled art")
+
+    def test_wrapped_label_drops_the_icon_for_legibility(self):
+        # A 96px key cannot carry an icon and two large lines at once.
+        argv = self.render_argv("terminal", "Test All")
+        self.assertIn("caption:TEST\nALL", argv)
+        self.assertFalse(any(str(module.ICONS) in str(item) for item in argv),
+                         "a wrapped caption takes the whole key face")
+
+    def test_bundled_art_is_cropped_so_its_baked_caption_is_not_reused(self):
+        # assets/keys/*.jpg bake their own label into the bottom of the tile.
+        argv = self.render_argv("terminal", "Terminal")
+        self.assertIn(module.BUILT_IN_ICON_CROP, argv)
+
+    def test_cache_key_separates_deck_sizes(self):
+        sizes = set()
+        for size in ((96, 96), (120, 120)):
+            argv = self.render_argv("terminal", "Terminal", size=size)
+            sizes.add(argv[-1])
+            self.assertIn("%dx%d" % size, argv)
+        self.assertEqual(2, len(sizes), "an XL and a Plus must not share cached art")
+
+
 class ControlDispatchTests(unittest.TestCase):
     def make_daemon(self, deck):
         daemon = module.Daemon.__new__(module.Daemon)

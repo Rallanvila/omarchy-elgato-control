@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0
+
+- Rewrite key artwork around an auto-fitted caption. The label is now sized to
+  fill its box instead of being drawn at a fixed pointsize, so it scales with
+  the deck rather than shrinking to 9pt on a 96px Stream Deck XL key.
+- Stop compositing the bundled pictograms as icons. Those tiles bake their own
+  caption into the artwork, so reusing them at a smaller size drew the label
+  twice, both times illegibly. The baked band is now cropped off before the
+  glyph is used.
+- Give a wrapped caption the whole key face. A 96px key has no room for an icon
+  and two large lines at once, and a key that cannot be read is not doing its
+  job; single-word keys keep their art.
+- Pre-wrap captions one word per line. ImageMagick's `caption:` fits the box
+  width and only wraps when forced, which rendered "Test All" as one small line
+  rather than two large ones.
+- Use Noto Sans Condensed Bold, which fits noticeably more legible text on a
+  narrow key than the regular face.
+
 ## 0.4.0
 
 - Replace the hand-rolled `ctypes` hidapi layer, key-image packetization, and

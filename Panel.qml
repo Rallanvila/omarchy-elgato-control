@@ -205,9 +205,9 @@ Panel {
                     border.width: root.selectedControl === "key" && root.selectedIndex === index ? 2 : 1
                     border.color: root.selectedControl === "key" && root.selectedIndex === index ? Color.accent : root.controlBorder
                     Column { anchors.centerIn: parent; width: parent.width - Style.space(10); spacing: Style.space(3)
-                      Text { anchors.horizontalCenter: parent.horizontalCenter; text: index + 1; color: Color.muted; font.family: Style.font.family; font.pixelSize: 9 }
+                      Text { anchors.horizontalCenter: parent.horizontalCenter; text: index + 1; color: Color.muted; font.family: Style.font.family; font.pixelSize: 8 }
                       Image { anchors.horizontalCenter: parent.horizontalCenter; width: Math.min(Style.space(30), parent.width * 0.62); height: width; source: root.actionIcon(modelData.action); visible: source.toString() !== ""; fillMode: Image.PreserveAspectFit; smooth: true }
-                      Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: root.actionName(modelData.action); textFormat: Text.PlainText; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 9 }
+                      Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight; text: root.actionName(modelData.action); textFormat: Text.PlainText; color: Color.foreground; font.family: Style.font.family; font.pixelSize: 10 }
                     }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectControl("key", index) }
                   }
