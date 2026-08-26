@@ -16,6 +16,10 @@ class FakeDeck:
         self._rows, self._columns, self._dials = rows, columns, dials
         self._visual, self._touch = visual, touch
 
+        self.opened, self.resets, self.brightness = False, 0, None
+        self.key_callback = self.dial_callback = None
+        self.images = {}
+
     def deck_type(self): return self._name
     def id(self): return self._id
     def key_count(self): return self._keys
@@ -23,6 +27,20 @@ class FakeDeck:
     def dial_count(self): return self._dials
     def is_visual(self): return self._visual
     def is_touch(self): return self._touch
+    def open(self): self.opened = True
+    def close(self): self.opened = False
+    def reset(self): self.resets += 1
+    def get_serial_number(self): return "SN-%s" % self._id
+    def set_key_callback(self, callback): self.key_callback = callback
+    def set_dial_callback(self, callback): self.dial_callback = callback
+    def set_brightness(self, percent): self.brightness = percent
+    def set_key_image(self, index, image): self.images[index] = image
+    def key_image_format(self): return {"size": (96, 96), "format": "JPEG"}
+
+
+class FakeManager:
+    def __init__(self, decks): self._decks = decks
+    def enumerate(self): return list(self._decks)
 
 
 SCRIPT = pathlib.Path(__file__).parents[1] / "bin" / "elgato-control"
@@ -275,6 +293,105 @@ class ControlDispatchTests(unittest.TestCase):
         daemon._on_dial(deck, 0, module.DialEventType.PUSH, False)
         daemon.drain_events()
         self.assertEqual(["volume_mute"], daemon.actions)
+
+
+class ConnectTests(unittest.TestCase):
+    def make_daemon(self):
+        daemon = module.Daemon.__new__(module.Daemon)
+        daemon.decks, daemon.events, daemon.manager = {}, queue.Queue(), None
+        daemon.profile = {"name": "Test", "keys": [{"label": "Terminal", "action": "terminal"}],
+                          "dials": [], "pedals": []}
+        daemon.mtime = 0
+        daemon.brightness = 55
+        daemon.light_states = []
+        daemon.discovered_lights = []
+        daemon.last_light_discovery = 0
+        daemon.lcd_signature = None
+        daemon.running = True
+        daemon.status = {"plus": None, "pedal": None, "wave": None, "lights": [],
+                         "devices": [], "recentReports": {}, "error": ""}
+        return daemon
+
+    def connect_with(self, decks, decorate=False):
+        directory = tempfile.TemporaryDirectory()
+        config = pathlib.Path(directory.name)
+        patches = [
+            mock.patch.object(module, "CONFIG", config),
+            mock.patch.object(module, "STATE", config / "state"),
+            mock.patch.object(module, "PROFILE", config / "profile.json"),
+            mock.patch.object(module, "DeviceManager", lambda: FakeManager(decks)),
+            mock.patch.object(module, "detect_wave", return_value=None),
+        ]
+        if not decorate:
+            patches.append(mock.patch.object(module.Daemon, "decorate", lambda self, deck: None))
+        daemon = self.make_daemon()
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            if decorate:
+                daemon.connect()
+            else:
+                with patches[5]:
+                    daemon.connect()
+        directory.cleanup()
+        return daemon
+
+    def test_connect_opens_the_deck_and_registers_callbacks(self):
+        deck = FakeDeck()
+        daemon = self.connect_with([deck])
+        self.assertTrue(deck.opened)
+        self.assertEqual(1, deck.resets)
+        self.assertIsNotNone(deck.key_callback)
+        self.assertIsNone(deck.dial_callback, "an XL has no dials to subscribe to")
+        self.assertEqual("", daemon.status["error"])
+
+    def test_connect_publishes_geometry_for_the_panel(self):
+        daemon = self.connect_with([FakeDeck()])
+        self.assertEqual(32, daemon.status["plus"]["keyCount"])
+        self.assertEqual(8, daemon.status["plus"]["keyColumns"])
+        self.assertEqual(4, daemon.status["plus"]["keyRows"])
+        self.assertEqual("SN-fake:0", daemon.status["plus"]["serial"])
+        self.assertIsNone(daemon.status["pedal"])
+        self.assertEqual([daemon.status["plus"]], daemon.status["devices"])
+
+    def test_connect_grows_the_stored_profile_to_the_deck(self):
+        daemon = self.connect_with([FakeDeck()])
+        self.assertEqual(32, len(daemon.profile["keys"]))
+        self.assertEqual("terminal", daemon.profile["keys"][0]["action"])
+
+    def test_a_pedal_fills_its_own_status_slot(self):
+        pedal = FakeDeck(name="Stream Deck Pedal", ident="pedal:0", keys=3, rows=1,
+                         columns=3, visual=False)
+        daemon = self.connect_with([FakeDeck(), pedal])
+        self.assertEqual("Stream Deck Pedal", daemon.status["pedal"]["product"])
+        self.assertEqual("Stream Deck XL", daemon.status["plus"]["product"])
+
+    def test_dials_are_subscribed_only_when_present(self):
+        plus = FakeDeck(name="Stream Deck +", ident="plus:0", keys=8, rows=2,
+                        columns=4, dials=4, touch=True)
+        self.connect_with([plus])
+        self.assertIsNotNone(plus.dial_callback)
+
+    def test_unplugged_deck_is_closed_and_dropped(self):
+        deck = FakeDeck()
+        daemon = self.connect_with([deck])
+        with mock.patch.object(module, "DeviceManager", lambda: FakeManager([])), \
+             mock.patch.object(module, "detect_wave", return_value=None):
+            daemon.manager = None
+            daemon.connect()
+        self.assertFalse(deck.opened)
+        self.assertEqual({}, daemon.decks)
+        self.assertIsNone(daemon.status["plus"])
+
+    def test_decorate_paints_every_key_at_the_deck_size(self):
+        deck = FakeDeck()
+        with mock.patch.object(module, "rendered_key_image") as render, \
+             mock.patch.object(module, "Image", mock.MagicMock()), \
+             mock.patch.object(module, "PILHelper", mock.MagicMock()):
+            render.return_value = mock.MagicMock(**{"exists.return_value": True})
+            self.connect_with([deck], decorate=True)
+        self.assertEqual(55, deck.brightness)
+        # Only the one configured key carries an action; blanks are skipped.
+        self.assertEqual([0], sorted(deck.images))
+        self.assertEqual((96, 96), render.call_args[0][3])
 
 
 class QmlPlainTextTests(unittest.TestCase):
