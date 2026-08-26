@@ -109,6 +109,13 @@ class DeviceModelTests(unittest.TestCase):
         self.assertEqual(["voxtype", "record", "start"], module.command_for("voxtype_push_to_talk"))
         self.assertEqual(["voxtype", "record", "stop"], module.release_command_for("voxtype_push_to_talk"))
 
+    def test_terminal_action_defers_to_the_configured_terminal(self):
+        command = module.command_for("terminal")
+        self.assertEqual(["omarchy", "launch", "terminal"], command)
+        for emulator in ("kitty", "alacritty", "ghostty", "foot"):
+            self.assertNotIn(emulator, command,
+                             "the terminal action must not hardcode one emulator")
+
     def test_desktop_application_launch_is_validated_and_uses_argv(self):
         with mock.patch.object(module, "desktop_file_exists", return_value=True):
             self.assertEqual(["uwsm-app", "--", "gtk-launch", "example.App"],
